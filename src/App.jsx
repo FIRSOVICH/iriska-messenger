@@ -2,54 +2,37 @@ import { useState } from "react";
 import "./App.css";
 
 function App() {
-  const [selectedChat, setSelectedChat] = useState(0);
-  const [input, setInput] = useState("");
+  const [isAuth, setIsAuth] = useState(false);
+  const [mode, setMode] = useState("login");
+  const [username, setUsername] = useState("");
 
-  const [chats, setChats] = useState([
-    {
-      name: "Ириска AI",
-      status: "онлайн",
-      avatar: "🍬",
-      messages: [
-        { from: "bot", text: "Привет, Кирилл! Я Ириска. Чем займёмся?" },
-        { from: "me", text: "Делаем мессенджер 🚀" },
-      ],
-    },
-    {
-      name: "Тестовый чат",
-      status: "был недавно",
-      avatar: "💬",
-      messages: [{ from: "bot", text: "Это тестовый диалог." }],
-    },
-    {
-      name: "Проект BlackLine",
-      status: "защищённый чат",
-      avatar: "🛡️",
-      messages: [{ from: "bot", text: "E2E-шифрование будет на следующем этапе." }],
-    },
-  ]);
+  if (!isAuth) {
+    return (
+      <div className="app auth-page">
+        <div className="auth-card">
+          <h1>🍬 Ириска</h1>
+          <p>Защищённый мессенджер нового поколения</p>
 
-  function sendMessage() {
-    if (!input.trim()) return;
+          <input
+            placeholder="Логин"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
 
-    const newChats = [...chats];
-    newChats[selectedChat].messages.push({
-      from: "me",
-      text: input,
-    });
+          <input placeholder="Пароль" type="password" />
 
-    const userText = input;
-    setInput("");
-    setChats(newChats);
+          <button onClick={() => setIsAuth(true)}>
+            {mode === "login" ? "Войти" : "Зарегистрироваться"}
+          </button>
 
-    setTimeout(() => {
-      const replyChats = [...newChats];
-      replyChats[selectedChat].messages.push({
-        from: "bot",
-        text: `Ириска получила: "${userText}"`,
-      });
-      setChats([...replyChats]);
-    }, 600);
+          <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
+            {mode === "login"
+              ? "Нет аккаунта? Создать"
+              : "Уже есть аккаунт? Войти"}
+          </span>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -59,58 +42,39 @@ function App() {
           <span>🍬</span>
           <div>
             <h1>Ириска</h1>
-            <p>защищённый мессенджер</p>
+            <p>{username || "Пользователь"} онлайн</p>
           </div>
         </div>
 
         <button className="new-chat">+ Новый чат</button>
 
         <div className="chat-list">
-          {chats.map((chat, index) => (
-            <div
-              key={index}
-              className={`chat-item ${selectedChat === index ? "active" : ""}`}
-              onClick={() => setSelectedChat(index)}
-            >
-              <div className="avatar">{chat.avatar}</div>
-              <div>
-                <h3>{chat.name}</h3>
-                <p>{chat.status}</p>
-              </div>
+          <div className="chat-item active">
+            <div className="avatar">🍬</div>
+            <div>
+              <h3>Ириска AI</h3>
+              <p>онлайн</p>
             </div>
-          ))}
+          </div>
         </div>
       </aside>
 
       <main className="chat">
         <header className="chat-header">
           <div>
-            <h2>{chats[selectedChat].name}</h2>
-            <p>{chats[selectedChat].status}</p>
-          </div>
-          <div className="header-actions">
-            <button>🔍</button>
-            <button>📞</button>
-            <button>⚙️</button>
+            <h2>Ириска AI</h2>
+            <p>онлайн</p>
           </div>
         </header>
 
         <section className="messages">
-          {chats[selectedChat].messages.map((message, index) => (
-            <div key={index} className={`message ${message.from}`}>
-              {message.text}
-            </div>
-          ))}
+          <div className="message bot">Привет, {username || "друг"}! Ты вошёл в Ириску.</div>
+          <div className="message me">Теперь делаем настоящий мессенджер 🚀</div>
         </section>
 
         <footer className="input-area">
-          <input
-            value={input}
-            placeholder="Введите сообщение..."
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          />
-          <button onClick={sendMessage}>Отправить</button>
+          <input placeholder="Введите сообщение..." />
+          <button>Отправить</button>
         </footer>
       </main>
     </div>
