@@ -3,18 +3,23 @@ import "./App.css";
 import { supabase } from "./supabase";
 
 const SITE_URL = "https://iriska-messenger.vercel.app";
+const isMobile = () => window.innerWidth <= 768;
 
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+
   const [myChats, setMyChats] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
+
   const [selectedChat, setSelectedChat] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
+
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
-  const [showSidebar, setShowSidebar] = useState(true);
+
+  const [showSidebar, setShowSidebar] = useState(() => true);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -23,20 +28,31 @@ function App() {
   const [authMessage, setAuthMessage] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
     if (!session?.user) return;
+
     createProfileIfMissing();
     loadMyChats();
-  }, [session]);
+
+    const chatsInterval = setInterval(() => {
+      loadMyChats();
+    }, 2000);
+
+    return () => clearInterval(chatsInterval);
+  }, [session?.user?.id]);
 
   useEffect(() => {
     if (!selectedChat?.id) return;
@@ -44,7 +60,7 @@ function App() {
     loadMessages(selectedChat.id);
 
     const channel = supabase
-      .channel(`private-chat-${selectedChat.id}`)
+      .channel(`messages-${selectedChat.id}`)
       .on(
         "postgres_changes",
         {
@@ -63,28 +79,30 @@ function App() {
       )
       .subscribe();
 
-    const interval = setInterval(() => {
+    const messagesInterval = setInterval(() => {
       loadMessages(selectedChat.id);
-    }, 1500);
+    }, 1000);
 
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
+      clearInterval(messagesInterval);
     };
   }, [selectedChat?.id]);
 
   async function register() {
-    if (!username || !email || !password) {
+    if (!username.trim() || !email.trim() || !password.trim()) {
       setAuthMessage("Заполни логин, email и пароль");
       return;
     }
 
     const { error } = await supabase.auth.signUp({
-      email,
+      email: email.trim(),
       password,
       options: {
         emailRedirectTo: SITE_URL,
-        data: { username },
+        data: {
+          username: username.trim(),
+        },
       },
     });
 
@@ -98,7 +116,10 @@ function App() {
   }
 
   async function login() {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
 
     if (error) {
       setAuthMessage(error.message);
@@ -115,7 +136,7 @@ function App() {
       .from("profiles")
       .select("*")
       .eq("id", user.id)
-      .single();
+      .maybeSingle();
 
     if (existingProfile) {
       setProfile(existingProfile);
@@ -126,7 +147,10 @@ function App() {
 
     const { data, error } = await supabase
       .from("profiles")
-      .insert({ id: user.id, username: name })
+      .insert({
+        id: user.id,
+        username: name,
+      })
       .select()
       .single();
 
@@ -139,6 +163,8 @@ function App() {
   }
 
   async function loadMyChats() {
+    if (!session?.user?.id) return;
+
     const { data, error } = await supabase
       .from("private_chats")
       .select("*")
@@ -152,19 +178,31 @@ function App() {
 
     const chats = await Promise.all(
       (data || []).map(async (chat) => {
-        const otherId = chat.user_one === session.user.id ? chat.user_two : chat.user_one;
+        const otherId =
+          chat.user_one === session.user.id ? chat.user_two : chat.user_one;
 
         const { data: otherUser } = await supabase
           .from("profiles")
           .select("*")
           .eq("id", otherId)
-          .single();
+          .maybeSingle();
 
-        return { ...chat, otherUser };
+        return {
+          ...chat,
+          otherUser,
+        };
       })
     );
 
     setMyChats(chats);
+
+    if (selectedChat?.id) {
+      const updatedSelectedChat = chats.find((chat) => chat.id === selectedChat.id);
+      if (updatedSelectedChat) {
+        setSelectedChat(updatedSelectedChat);
+        setSelectedUser(updatedSelectedChat.otherUser);
+      }
+    }
   }
 
   async function searchUsers(value) {
@@ -178,8 +216,9 @@ function App() {
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
-      .ilike("username", `%${value}%`)
-      .neq("id", session.user.id);
+      .ilike("username", `%${value.trim()}%`)
+      .neq("id", session.user.id)
+      .limit(20);
 
     if (error) {
       console.error("SEARCH ERROR:", error);
@@ -191,47 +230,71 @@ function App() {
 
   async function openChatWithUser(user) {
     const ids = [session.user.id, user.id].sort();
+
     const user_one = ids[0];
     const user_two = ids[1];
 
-    const { data: existingChat } = await supabase
+    const { data: existingChat, error: findError } = await supabase
       .from("private_chats")
       .select("*")
       .eq("user_one", user_one)
       .eq("user_two", user_two)
-      .single();
+      .maybeSingle();
+
+    if (findError) {
+      console.error("FIND CHAT ERROR:", findError);
+      return;
+    }
 
     let chat = existingChat;
 
     if (!chat) {
-      const { data: newChat, error } = await supabase
+      const { data: newChat, error: createError } = await supabase
         .from("private_chats")
-        .insert({ user_one, user_two })
+        .insert({
+          user_one,
+          user_two,
+        })
         .select()
         .single();
 
-      if (error) {
-        console.error("CREATE CHAT ERROR:", error);
+      if (createError) {
+        console.error("CREATE CHAT ERROR:", createError);
         return;
       }
 
       chat = newChat;
     }
 
-    setSelectedChat(chat);
+    const fullChat = {
+      ...chat,
+      otherUser: user,
+    };
+
+    setSelectedChat(fullChat);
     setSelectedUser(user);
     setMessages([]);
     setSearch("");
     setSearchResults([]);
-    setShowSidebar(false);
+
+    await loadMessages(chat.id);
     await loadMyChats();
+
+    if (isMobile()) {
+      setShowSidebar(false);
+    }
   }
 
-  function openExistingChat(chat) {
+  async function openExistingChat(chat) {
     setSelectedChat(chat);
     setSelectedUser(chat.otherUser);
     setMessages([]);
-    setShowSidebar(false);
+
+    await loadMessages(chat.id);
+
+    if (isMobile()) {
+      setShowSidebar(false);
+    }
   }
 
   async function loadMessages(chatId) {
@@ -250,12 +313,10 @@ function App() {
   }
 
   async function sendMessage() {
-    console.log("SEND CLICK");
+    if (!text.trim() || !selectedChat?.id) return;
 
-    if (!text.trim() || !selectedChat) return;
-
-    const tempId = crypto.randomUUID();
     const messageText = text.trim();
+    const tempId = crypto.randomUUID();
 
     const localMessage = {
       id: tempId,
@@ -281,6 +342,7 @@ function App() {
 
     if (error) {
       console.error("SEND MESSAGE ERROR:", error);
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
       return;
     }
 
@@ -288,17 +350,23 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
+    await loadMessages(selectedChat.id);
     await loadMyChats();
   }
 
   async function logout() {
     await supabase.auth.signOut();
+
     setSession(null);
     setProfile(null);
     setMyChats([]);
-    setMessages([]);
+    setSearchResults([]);
     setSelectedChat(null);
     setSelectedUser(null);
+    setMessages([]);
+    setText("");
+    setSearch("");
+    setShowSidebar(true);
   }
 
   if (!session) {
@@ -309,18 +377,34 @@ function App() {
           <p>Регистрация и вход</p>
 
           {mode === "register" && (
-            <input placeholder="Логин" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input
+              placeholder="Логин"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
           )}
 
-          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <input placeholder="Пароль" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <input
+            placeholder="Пароль"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
           <button onClick={mode === "login" ? login : register}>
             {mode === "login" ? "Войти" : "Создать аккаунт"}
           </button>
 
           <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Войти"}
+            {mode === "login"
+              ? "Нет аккаунта? Регистрация"
+              : "Уже есть аккаунт? Войти"}
           </span>
 
           {authMessage && <p className="auth-message">{authMessage}</p>}
@@ -340,7 +424,9 @@ function App() {
           </div>
         </div>
 
-        <button className="logout" onClick={logout}>Выйти</button>
+        <button className="logout" onClick={logout}>
+          Выйти
+        </button>
 
         <input
           className="search-input"
@@ -352,8 +438,13 @@ function App() {
         {searchResults.length > 0 && (
           <div className="block">
             <p className="block-title">Поиск</p>
+
             {searchResults.map((user) => (
-              <div className="chat-item" key={user.id} onClick={() => openChatWithUser(user)}>
+              <div
+                className="chat-item"
+                key={user.id}
+                onClick={() => openChatWithUser(user)}
+              >
                 <div className="avatar">🔎</div>
                 <div>
                   <h3>{user.username}</h3>
@@ -373,7 +464,9 @@ function App() {
 
           {myChats.map((chat) => (
             <div
-              className={`chat-item ${selectedChat?.id === chat.id ? "active" : ""}`}
+              className={`chat-item ${
+                selectedChat?.id === chat.id ? "active" : ""
+              }`}
               key={chat.id}
               onClick={() => openExistingChat(chat)}
             >
@@ -389,24 +482,31 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button className="back-btn" onClick={() => setShowSidebar(true)}>←</button>
+          <button className="back-btn" onClick={() => setShowSidebar(true)}>
+            ←
+          </button>
+
           <div>
             <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
-            <p>{selectedUser ? "личный защищённый чат" : "найди пользователя слева"}</p>
+            <p>
+              {selectedUser
+                ? "личный защищённый чат"
+                : "найди пользователя слева"}
+            </p>
           </div>
         </header>
 
         <section className="messages">
           {!selectedUser && (
-            <div className="message bot">
-              Выбери чат или найди пользователя.
-            </div>
+            <div className="message bot">Выбери чат или найди пользователя.</div>
           )}
 
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
+              className={`message ${
+                msg.sender_id === session.user.id ? "me" : "bot"
+              }`}
             >
               {msg.text}
             </div>
@@ -419,9 +519,14 @@ function App() {
             disabled={!selectedChat}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder={selectedChat ? "Введите сообщение..." : "Сначала выбери чат"}
+            placeholder={
+              selectedChat ? "Введите сообщение..." : "Сначала выбери чат"
+            }
           />
-          <button onClick={sendMessage} disabled={!selectedChat}>Отправить</button>
+
+          <button onClick={sendMessage} disabled={!selectedChat}>
+            Отправить
+          </button>
         </footer>
       </main>
     </div>
