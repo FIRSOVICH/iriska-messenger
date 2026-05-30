@@ -570,3 +570,53 @@ input {
 .profile-avatar span {
   font-size: 30px;
 }
+
+.image-btn {
+  width: 52px;
+  min-width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.image-btn input {
+  display: none;
+}
+
+.image-btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.image-message {
+  padding: 6px;
+  background: rgba(30, 41, 59, 0.9);
+}
+
+.chat-image {
+  max-width: 260px;
+  max-height: 320px;
+  border-radius: 18px;
+  display: block;
+  object-fit: cover;
+}
+
+@media (max-width: 768px) {
+  .image-btn {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    font-size: 20px;
+  }
+
+  .chat-image {
+    max-width: 220px;
+    max-height: 280px;
+  }
+}

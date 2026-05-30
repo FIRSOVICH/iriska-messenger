@@ -400,6 +400,8 @@ function App() {
       sender_id: session.user.id,
       chat_id: selectedChat.id,
       text: messageText,
+      image_url: null,
+      message_type: "text",
       created_at: new Date().toISOString(),
       pending: true,
     };
@@ -413,12 +415,87 @@ function App() {
         sender_id: session.user.id,
         chat_id: selectedChat.id,
         text: messageText,
+        image_url: null,
+        message_type: "text",
       })
       .select()
       .single();
 
     if (error) {
       console.error("SEND MESSAGE ERROR:", error);
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((msg) => (msg.id === tempId ? data : msg))
+    );
+
+    markChatAsRead(selectedChat.id);
+    await loadMyChats();
+  }
+
+  async function sendImage(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file || !selectedChat?.id || !session?.user?.id) return;
+
+    const tempId = crypto.randomUUID();
+    const previewUrl = URL.createObjectURL(file);
+
+    const localMessage = {
+      id: tempId,
+      sender_id: session.user.id,
+      chat_id: selectedChat.id,
+      text: "",
+      image_url: previewUrl,
+      message_type: "image",
+      created_at: new Date().toISOString(),
+      pending: true,
+    };
+
+    setMessages((current) => [...current, localMessage]);
+
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${session.user.id}-${Date.now()}.${fileExt}`;
+    const filePath = `${selectedChat.id}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("chat-images")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("IMAGE UPLOAD ERROR:", uploadError);
+      alert("Ошибка загрузки изображения");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    const { data: publicData } = supabase.storage
+      .from("chat-images")
+      .getPublicUrl(filePath);
+
+    const imageUrl = publicData.publicUrl;
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: selectedChat.id,
+        text: "",
+        image_url: imageUrl,
+        message_type: "image",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("SEND IMAGE MESSAGE ERROR:", error);
+      alert("Ошибка отправки изображения");
       setMessages((current) => current.filter((msg) => msg.id !== tempId));
       return;
     }
@@ -499,9 +576,17 @@ function App() {
 
   function renderLastMessage(chat) {
     if (!chat.lastMessage) return "личный чат";
+
+    if (chat.lastMessage.message_type === "image") {
+      return chat.lastMessage.sender_id === session.user.id
+        ? "Вы: 📷 Фото"
+        : "📷 Фото";
+    }
+
     if (chat.lastMessage.sender_id === session.user.id) {
       return `Вы: ${chat.lastMessage.text || "сообщение"}`;
     }
+
     return chat.lastMessage.text || "сообщение";
   }
 
@@ -668,9 +753,13 @@ function App() {
               key={msg.id}
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
-              }`}
+              } ${msg.message_type === "image" ? "image-message" : ""}`}
             >
-              {msg.text}
+              {msg.message_type === "image" && msg.image_url ? (
+                <img className="chat-image" src={msg.image_url} alt="Фото" />
+              ) : (
+                msg.text
+              )}
             </div>
           ))}
 
@@ -678,6 +767,16 @@ function App() {
         </section>
 
         <footer className="input-area">
+          <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
+            📎
+            <input
+              type="file"
+              accept="image/*"
+              disabled={!selectedChat}
+              onChange={sendImage}
+            />
+          </label>
+
           <input
             value={text}
             disabled={!selectedChat}
