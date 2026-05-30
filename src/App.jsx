@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { supabase } from "./supabase";
 
@@ -8,18 +8,14 @@ const isMobile = () => window.innerWidth <= 768;
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
-
   const [myChats, setMyChats] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
-
   const [selectedChat, setSelectedChat] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
-
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
-
-  const [showSidebar, setShowSidebar] = useState(() => true);
+  const [showSidebar, setShowSidebar] = useState(true);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -27,67 +23,119 @@ function App() {
   const [username, setUsername] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
+  const messagesEndRef = useRef(null);
+  const selectedChatRef = useRef(null);
+  const sessionRef = useRef(null);
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
+    selectedChatRef.current = selectedChat;
+  }, [selectedChat]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
-    return () => {
-      listener.subscription.unsubscribe();
-    };
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!session?.user) return;
 
-    createProfileIfMissing();
-    loadMyChats();
+    initUser();
 
-    const chatsInterval = setInterval(() => {
-      loadMyChats();
-    }, 2000);
+    const onlineTimer = setInterval(updateOnlineStatus, 20000);
 
-    return () => clearInterval(chatsInterval);
-  }, [session?.user?.id]);
-
-  useEffect(() => {
-    if (!selectedChat?.id) return;
-
-    loadMessages(selectedChat.id);
-
-    const channel = supabase
-      .channel(`messages-${selectedChat.id}`)
+    const messagesChannel = supabase
+      .channel("global-messages")
       .on(
         "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `chat_id=eq.${selectedChat.id}`,
-        },
-        (payload) => {
-          setMessages((current) => {
-            const exists = current.some((msg) => msg.id === payload.new.id);
-            if (exists) return current;
-            return [...current, payload.new];
-          });
+        { event: "INSERT", schema: "public", table: "messages" },
+        async (payload) => {
+          const currentChat = selectedChatRef.current;
+          const currentSession = sessionRef.current;
+
+          if (currentChat?.id === payload.new.chat_id) {
+            setMessages((current) => {
+              const exists = current.some((msg) => msg.id === payload.new.id);
+              if (exists) return current;
+              return [...current, payload.new];
+            });
+
+            if (payload.new.sender_id !== currentSession?.user?.id) {
+              markChatAsRead(payload.new.chat_id);
+            }
+          }
+
+          await loadMyChats();
         }
       )
       .subscribe();
 
-    const messagesInterval = setInterval(() => {
-      loadMessages(selectedChat.id);
-    }, 1000);
+    const chatsChannel = supabase
+      .channel("private-chats")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "private_chats" },
+        async () => {
+          await loadMyChats();
+        }
+      )
+      .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
-      clearInterval(messagesInterval);
+      clearInterval(onlineTimer);
+      supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(chatsChannel);
     };
-  }, [selectedChat?.id]);
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  async function initUser() {
+    await createProfileIfMissing();
+    await updateOnlineStatus();
+    await loadMyChats();
+  }
+
+  function scrollToBottom() {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+  }
+
+  function getReadKey(chatId) {
+    return `iriska_read_${session?.user?.id}_${chatId}`;
+  }
+
+  function markChatAsRead(chatId) {
+    localStorage.setItem(getReadKey(chatId), new Date().toISOString());
+    loadMyChats();
+  }
+
+  function isUserOnline(user) {
+    if (!user?.online_at) return false;
+    const diff = Date.now() - new Date(user.online_at).getTime();
+    return diff < 45000;
+  }
+
+  async function updateOnlineStatus() {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    await supabase
+      .from("profiles")
+      .update({ online_at: new Date().toISOString() })
+      .eq("id", currentSession.user.id);
+  }
 
   async function register() {
     if (!username.trim() || !email.trim() || !password.trim()) {
@@ -100,9 +148,7 @@ function App() {
       password,
       options: {
         emailRedirectTo: SITE_URL,
-        data: {
-          username: username.trim(),
-        },
+        data: { username: username.trim() },
       },
     });
 
@@ -150,6 +196,7 @@ function App() {
       .insert({
         id: user.id,
         username: name,
+        online_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -163,12 +210,13 @@ function App() {
   }
 
   async function loadMyChats() {
-    if (!session?.user?.id) return;
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
 
     const { data, error } = await supabase
       .from("private_chats")
       .select("*")
-      .or(`user_one.eq.${session.user.id},user_two.eq.${session.user.id}`)
+      .or(`user_one.eq.${currentSession.user.id},user_two.eq.${currentSession.user.id}`)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -179,7 +227,7 @@ function App() {
     const chats = await Promise.all(
       (data || []).map(async (chat) => {
         const otherId =
-          chat.user_one === session.user.id ? chat.user_two : chat.user_one;
+          chat.user_one === currentSession.user.id ? chat.user_two : chat.user_one;
 
         const { data: otherUser } = await supabase
           .from("profiles")
@@ -187,20 +235,47 @@ function App() {
           .eq("id", otherId)
           .maybeSingle();
 
+        const { data: lastMessages } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("chat_id", chat.id)
+          .eq("is_deleted", false)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        const lastRead = localStorage.getItem(
+          `iriska_read_${currentSession.user.id}_${chat.id}`
+        );
+
+        const { data: unreadMessages } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("chat_id", chat.id)
+          .eq("is_deleted", false)
+          .neq("sender_id", currentSession.user.id);
+
+        const unreadCount = (unreadMessages || []).filter((msg) => {
+          if (!lastRead) return true;
+          return new Date(msg.created_at) > new Date(lastRead);
+        }).length;
+
         return {
           ...chat,
           otherUser,
+          lastMessage: lastMessages?.[0] || null,
+          unreadCount,
         };
       })
     );
 
     setMyChats(chats);
 
-    if (selectedChat?.id) {
-      const updatedSelectedChat = chats.find((chat) => chat.id === selectedChat.id);
-      if (updatedSelectedChat) {
-        setSelectedChat(updatedSelectedChat);
-        setSelectedUser(updatedSelectedChat.otherUser);
+    const currentSelected = selectedChatRef.current;
+    if (currentSelected?.id) {
+      const updated = chats.find((chat) => chat.id === currentSelected.id);
+      if (updated) {
+        setSelectedChat(updated);
+        setSelectedUser(updated.otherUser);
       }
     }
   }
@@ -230,7 +305,6 @@ function App() {
 
   async function openChatWithUser(user) {
     const ids = [session.user.id, user.id].sort();
-
     const user_one = ids[0];
     const user_two = ids[1];
 
@@ -251,10 +325,7 @@ function App() {
     if (!chat) {
       const { data: newChat, error: createError } = await supabase
         .from("private_chats")
-        .insert({
-          user_one,
-          user_two,
-        })
+        .insert({ user_one, user_two })
         .select()
         .single();
 
@@ -266,10 +337,7 @@ function App() {
       chat = newChat;
     }
 
-    const fullChat = {
-      ...chat,
-      otherUser: user,
-    };
+    const fullChat = { ...chat, otherUser: user };
 
     setSelectedChat(fullChat);
     setSelectedUser(user);
@@ -278,11 +346,10 @@ function App() {
     setSearchResults([]);
 
     await loadMessages(chat.id);
+    markChatAsRead(chat.id);
     await loadMyChats();
 
-    if (isMobile()) {
-      setShowSidebar(false);
-    }
+    if (isMobile()) setShowSidebar(false);
   }
 
   async function openExistingChat(chat) {
@@ -291,10 +358,9 @@ function App() {
     setMessages([]);
 
     await loadMessages(chat.id);
+    markChatAsRead(chat.id);
 
-    if (isMobile()) {
-      setShowSidebar(false);
-    }
+    if (isMobile()) setShowSidebar(false);
   }
 
   async function loadMessages(chatId) {
@@ -302,6 +368,7 @@ function App() {
       .from("messages")
       .select("*")
       .eq("chat_id", chatId)
+      .eq("is_deleted", false)
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -350,7 +417,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    await loadMessages(selectedChat.id);
+    markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -367,6 +434,22 @@ function App() {
     setText("");
     setSearch("");
     setShowSidebar(true);
+  }
+
+  function renderAvatar(user) {
+    if (user?.avatar_url) {
+      return <img className="avatar-img" src={user.avatar_url} alt="avatar" />;
+    }
+
+    return user?.username?.[0]?.toUpperCase() || "👤";
+  }
+
+  function renderLastMessage(chat) {
+    if (!chat.lastMessage) return "личный чат";
+    if (chat.lastMessage.sender_id === session.user.id) {
+      return `Вы: ${chat.lastMessage.text || "сообщение"}`;
+    }
+    return chat.lastMessage.text || "сообщение";
   }
 
   if (!session) {
@@ -445,11 +528,12 @@ function App() {
                 key={user.id}
                 onClick={() => openChatWithUser(user)}
               >
-                <div className="avatar">🔎</div>
-                <div>
+                <div className="avatar">{renderAvatar(user)}</div>
+                <div className="chat-info">
                   <h3>{user.username}</h3>
-                  <p>начать личный чат</p>
+                  <p>{isUserOnline(user) ? "онлайн" : "офлайн"}</p>
                 </div>
+                <span className={isUserOnline(user) ? "online-dot" : "offline-dot"} />
               </div>
             ))}
           </div>
@@ -464,16 +548,27 @@ function App() {
 
           {myChats.map((chat) => (
             <div
-              className={`chat-item ${
-                selectedChat?.id === chat.id ? "active" : ""
-              }`}
+              className={`chat-item ${selectedChat?.id === chat.id ? "active" : ""}`}
               key={chat.id}
               onClick={() => openExistingChat(chat)}
             >
-              <div className="avatar">👤</div>
-              <div>
+              <div className="avatar">{renderAvatar(chat.otherUser)}</div>
+
+              <div className="chat-info">
                 <h3>{chat.otherUser?.username || "Пользователь"}</h3>
-                <p>личный чат</p>
+                <p>{renderLastMessage(chat)}</p>
+              </div>
+
+              <div className="chat-meta">
+                <span
+                  className={
+                    isUserOnline(chat.otherUser) ? "online-dot" : "offline-dot"
+                  }
+                />
+
+                {chat.unreadCount > 0 && (
+                  <span className="unread-badge">{chat.unreadCount}</span>
+                )}
               </div>
             </div>
           ))}
@@ -486,11 +581,17 @@ function App() {
             ←
           </button>
 
+          <div className="chat-header-avatar">
+            <div className="avatar">{renderAvatar(selectedUser)}</div>
+          </div>
+
           <div>
             <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
             <p>
               {selectedUser
-                ? "личный защищённый чат"
+                ? isUserOnline(selectedUser)
+                  ? "онлайн"
+                  : "офлайн"
                 : "найди пользователя слева"}
             </p>
           </div>
@@ -511,6 +612,8 @@ function App() {
               {msg.text}
             </div>
           ))}
+
+          <div ref={messagesEndRef} />
         </section>
 
         <footer className="input-area">
