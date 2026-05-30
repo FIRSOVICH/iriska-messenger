@@ -4,18 +4,13 @@ import { supabase } from "./supabase";
 
 function App() {
   const [session, setSession] = useState(null);
-  const [mode, setMode] = useState("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [username, setUsername] = useState("");
   const [profile, setProfile] = useState(null);
   const [users, setUsers] = useState([]);
-  const [message, setMessage] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
@@ -28,59 +23,9 @@ function App() {
     if (session?.user) {
       loadProfile();
       loadUsers();
+      loadMessages();
     }
   }, [session]);
-
-  async function register() {
-    if (!email || !password || !username) {
-      setMessage("Заполни email, логин и пароль");
-      return;
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    const userId = data.user?.id;
-
-  const result = await supabase
-  .from("profiles")
-  .insert({
-    id: userId,
-    username,
-  });
-
-console.log(result);
-
-    setMessage("Аккаунт создан. Теперь войди.");
-    setMode("login");
-  }
-
-  async function login() {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    setMessage("");
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-    setSession(null);
-    setProfile(null);
-  }
 
   async function loadProfile() {
     const { data } = await supabase
@@ -93,54 +38,39 @@ console.log(result);
   }
 
   async function loadUsers() {
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .order("created_at", { ascending: false });
-
+    const { data } = await supabase.from("profiles").select("*");
     setUsers(data || []);
   }
 
+  async function loadMessages() {
+    const { data } = await supabase
+      .from("messages")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    setMessages(data || []);
+  }
+
+  async function sendMessage() {
+    if (!text.trim()) return;
+
+    await supabase.from("messages").insert({
+      sender_id: session.user.id,
+      text,
+    });
+
+    setText("");
+    loadMessages();
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+  }
+
   if (!session) {
-    return (
-      <div className="app auth-page">
-        <div className="auth-card">
-          <h1>🍬 Ириска</h1>
-          <p>Регистрация и вход</p>
-
-          {mode === "register" && (
-            <input
-              placeholder="Логин"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-          )}
-
-          <input
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-
-          <input
-            placeholder="Пароль"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-
-          <button onClick={mode === "login" ? login : register}>
-            {mode === "login" ? "Войти" : "Создать аккаунт"}
-          </button>
-
-          <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Войти"}
-          </span>
-
-          {message && <p>{message}</p>}
-        </div>
-      </div>
-    );
+    return <div className="app auth-page">Перезайди в аккаунт</div>;
   }
 
   return (
@@ -154,9 +84,7 @@ console.log(result);
           </div>
         </div>
 
-        <button className="new-chat" onClick={logout}>
-          Выйти
-        </button>
+        <button className="new-chat" onClick={logout}>Выйти</button>
 
         <div className="chat-list">
           {users.map((user) => (
@@ -174,23 +102,30 @@ console.log(result);
       <main className="chat">
         <header className="chat-header">
           <div>
-            <h2>Пользователи Ириски</h2>
-            <p>онлайн</p>
+            <h2>Общий чат Ириски</h2>
+            <p>сообщения сохраняются в Supabase</p>
           </div>
         </header>
 
         <section className="messages">
-          <div className="message bot">
-            Ты вошёл как: {profile?.username || session.user.email}
-          </div>
-          <div className="message me">
-            Теперь аккаунты реально создаются в Supabase 🚀
-          </div>
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
+            >
+              {msg.text}
+            </div>
+          ))}
         </section>
 
         <footer className="input-area">
-          <input placeholder="Настоящие сообщения добавим следующим этапом..." />
-          <button>Отправить</button>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            placeholder="Введите сообщение..."
+          />
+          <button onClick={sendMessage}>Отправить</button>
         </footer>
       </main>
     </div>
