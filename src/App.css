@@ -638,3 +638,51 @@ input {
   opacity: 1;
   background: rgba(239, 68, 68, 0.75);
 }
+
+.reply-preview {
+  width: 100%;
+  padding: 10px 14px;
+  border-left: 4px solid #60a5fa;
+  background: rgba(15, 23, 42, 0.75);
+  border-radius: 14px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.reply-preview button {
+  border: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+}
+
+.reply-box {
+  padding: 8px 10px;
+  border-left: 3px solid #93c5fd;
+  background: rgba(15, 23, 42, 0.35);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.reply-btn {
+  margin-top: 6px;
+  margin-left: 6px;
+  border: none;
+  background: rgba(15, 23, 42, 0.35);
+  color: white;
+  border-radius: 10px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.reply-btn:hover {
+  opacity: 1;
+}

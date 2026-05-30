@@ -16,6 +16,7 @@ function App() {
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
   const [showSidebar, setShowSidebar] = useState(true);
+  const [replyTo, setReplyTo] = useState(null);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -402,6 +403,7 @@ function App() {
     setSelectedChat(fullChat);
     setSelectedUser(user);
     setMessages([]);
+    setReplyTo(null);
     setSearch("");
     setSearchResults([]);
 
@@ -416,6 +418,7 @@ function App() {
     setSelectedChat(chat);
     setSelectedUser(chat.otherUser);
     setMessages([]);
+    setReplyTo(null);
 
     await loadMessages(chat.id);
     markChatAsRead(chat.id);
@@ -437,6 +440,23 @@ function App() {
     }
 
     setMessages(data || []);
+  }
+
+  function getReplyPreview(message) {
+    if (!message) return "";
+    if (message.message_type === "image" || message.image_url) return "📷 Фото";
+    return message.text || "сообщение";
+  }
+
+  function startReply(message) {
+    if (message.is_deleted) return;
+    setReplyTo({
+      id: message.id,
+      sender_id: message.sender_id,
+      text: message.text || "",
+      image_url: message.image_url || null,
+      message_type: message.message_type || "text",
+    });
   }
 
   async function deleteMessage(messageId) {
@@ -461,6 +481,10 @@ function App() {
 
     setMessages((current) => current.filter((msg) => msg.id !== messageId));
 
+    if (replyTo?.id === messageId) {
+      setReplyTo(null);
+    }
+
     if (selectedChat?.id) {
       await loadMessages(selectedChat.id);
     }
@@ -481,6 +505,10 @@ function App() {
       text: messageText,
       image_url: null,
       message_type: "text",
+      reply_to_id: replyTo?.id || null,
+      reply_text: replyTo ? getReplyPreview(replyTo) : null,
+      reply_image_url: replyTo?.image_url || null,
+      reply_sender_id: replyTo?.sender_id || null,
       created_at: new Date().toISOString(),
       pending: true,
       is_deleted: false,
@@ -488,6 +516,7 @@ function App() {
 
     setMessages((current) => [...current, localMessage]);
     setText("");
+    setReplyTo(null);
 
     const { data, error } = await supabase
       .from("messages")
@@ -497,6 +526,10 @@ function App() {
         text: messageText,
         image_url: null,
         message_type: "text",
+        reply_to_id: localMessage.reply_to_id,
+        reply_text: localMessage.reply_text,
+        reply_image_url: localMessage.reply_image_url,
+        reply_sender_id: localMessage.reply_sender_id,
         is_deleted: false,
       })
       .select()
@@ -532,12 +565,17 @@ function App() {
       text: "",
       image_url: previewUrl,
       message_type: "image",
+      reply_to_id: replyTo?.id || null,
+      reply_text: replyTo ? getReplyPreview(replyTo) : null,
+      reply_image_url: replyTo?.image_url || null,
+      reply_sender_id: replyTo?.sender_id || null,
       created_at: new Date().toISOString(),
       pending: true,
       is_deleted: false,
     };
 
     setMessages((current) => [...current, localMessage]);
+    setReplyTo(null);
 
     const fileExt = file.name.split(".").pop();
     const fileName = `${session.user.id}-${Date.now()}.${fileExt}`;
@@ -571,6 +609,10 @@ function App() {
         text: "",
         image_url: imageUrl,
         message_type: "image",
+        reply_to_id: localMessage.reply_to_id,
+        reply_text: localMessage.reply_text,
+        reply_image_url: localMessage.reply_image_url,
+        reply_sender_id: localMessage.reply_sender_id,
         is_deleted: false,
       })
       .select()
@@ -646,6 +688,7 @@ function App() {
     setMessages([]);
     setText("");
     setSearch("");
+    setReplyTo(null);
     setShowSidebar(true);
   }
 
@@ -838,51 +881,81 @@ function App() {
                 msg.sender_id === session.user.id ? "me" : "bot"
               } ${msg.message_type === "image" ? "image-message" : ""}`}
             >
+              {msg.reply_to_id && (
+                <div className="reply-inside">
+                  <span>↩ Ответ</span>
+                  <p>{msg.reply_text || "сообщение"}</p>
+                </div>
+              )}
+
               {msg.message_type === "image" && msg.image_url ? (
                 <img className="chat-image" src={msg.image_url} alt="Фото" />
               ) : (
                 msg.text
               )}
 
-              {msg.sender_id === session.user.id && !msg.pending && (
+              <div className="message-actions">
                 <button
-                  className="delete-message-btn"
-                  onClick={() => deleteMessage(msg.id)}
-                  title="Удалить сообщение"
+                  className="reply-message-btn"
+                  onClick={() => startReply(msg)}
+                  title="Ответить"
                 >
-                  🗑
+                  ↩
                 </button>
-              )}
+
+                {msg.sender_id === session.user.id && !msg.pending && (
+                  <button
+                    className="delete-message-btn"
+                    onClick={() => deleteMessage(msg.id)}
+                    title="Удалить сообщение"
+                  >
+                    🗑
+                  </button>
+                )}
+              </div>
             </div>
           ))}
 
           <div ref={messagesEndRef} />
         </section>
 
-        <footer className="input-area">
-          <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
-            📎
+        <footer className="input-area-wrapper">
+          {replyTo && (
+            <div className="reply-preview">
+              <div>
+                <strong>Ответ на сообщение</strong>
+                <p>{getReplyPreview(replyTo)}</p>
+              </div>
+
+              <button onClick={() => setReplyTo(null)}>×</button>
+            </div>
+          )}
+
+          <div className="input-area">
+            <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
+              📎
+              <input
+                type="file"
+                accept="image/*"
+                disabled={!selectedChat}
+                onChange={sendImage}
+              />
+            </label>
+
             <input
-              type="file"
-              accept="image/*"
+              value={text}
               disabled={!selectedChat}
-              onChange={sendImage}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+              placeholder={
+                selectedChat ? "Введите сообщение..." : "Сначала выбери чат"
+              }
             />
-          </label>
 
-          <input
-            value={text}
-            disabled={!selectedChat}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder={
-              selectedChat ? "Введите сообщение..." : "Сначала выбери чат"
-            }
-          />
-
-          <button onClick={sendMessage} disabled={!selectedChat}>
-            Отправить
-          </button>
+            <button onClick={sendMessage} disabled={!selectedChat}>
+              Отправить
+            </button>
+          </div>
         </footer>
       </main>
     </div>
