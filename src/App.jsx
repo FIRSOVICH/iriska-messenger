@@ -99,7 +99,15 @@ function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+useEffect(() => {
+  if (!selectedChat?.id) return;
 
+  const interval = setInterval(() => {
+    loadMessages(selectedChat.id);
+  }, 1000);
+
+  return () => clearInterval(interval);
+}, [selectedChat?.id]);
   async function initUser() {
     await createProfileIfMissing();
     await updateOnlineStatus();
