@@ -25,11 +25,16 @@ function App() {
 
   const messagesEndRef = useRef(null);
   const selectedChatRef = useRef(null);
+  const selectedUserRef = useRef(null);
   const sessionRef = useRef(null);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
   }, [selectedChat]);
+
+  useEffect(() => {
+    selectedUserRef.current = selectedUser;
+  }, [selectedUser]);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -50,26 +55,40 @@ function App() {
 
     initUser();
 
-    const onlineTimer = setInterval(updateOnlineStatus, 20000);
+    const onlineTimer = setInterval(updateOnlineStatus, 15000);
+
+    const chatsRefreshTimer = setInterval(() => {
+      loadMyChats();
+    }, 5000);
 
     const messagesChannel = supabase
       .channel("global-messages")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        { event: "*", schema: "public", table: "messages" },
         async (payload) => {
           const currentChat = selectedChatRef.current;
           const currentSession = sessionRef.current;
 
-          if (currentChat?.id === payload.new.chat_id) {
-            setMessages((current) => {
-              const exists = current.some((msg) => msg.id === payload.new.id);
-              if (exists) return current;
-              return [...current, payload.new];
-            });
+          const row = payload.new || payload.old;
 
-            if (payload.new.sender_id !== currentSession?.user?.id) {
-              markChatAsRead(payload.new.chat_id);
+          if (currentChat?.id === row?.chat_id) {
+            if (payload.eventType === "UPDATE" && payload.new?.is_deleted) {
+              setMessages((current) =>
+                current.filter((msg) => msg.id !== payload.new.id)
+              );
+            } else if (payload.eventType === "INSERT") {
+              setMessages((current) => {
+                const exists = current.some((msg) => msg.id === payload.new.id);
+                if (exists) return current;
+                return [...current, payload.new];
+              });
+            } else {
+              loadMessages(currentChat.id);
+            }
+
+            if (row.sender_id !== currentSession?.user?.id) {
+              markChatAsRead(row.chat_id);
             }
           }
 
@@ -89,10 +108,41 @@ function App() {
       )
       .subscribe();
 
+    const profilesChannel = supabase
+      .channel("profiles-online")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "profiles" },
+        async (payload) => {
+          const updatedUser = payload.new;
+          const currentSession = sessionRef.current;
+          const currentSelectedUser = selectedUserRef.current;
+
+          if (updatedUser.id === currentSession?.user?.id) {
+            setProfile(updatedUser);
+          }
+
+          if (updatedUser.id === currentSelectedUser?.id) {
+            setSelectedUser(updatedUser);
+          }
+
+          setSearchResults((current) =>
+            current.map((user) =>
+              user.id === updatedUser.id ? updatedUser : user
+            )
+          );
+
+          await loadMyChats();
+        }
+      )
+      .subscribe();
+
     return () => {
       clearInterval(onlineTimer);
+      clearInterval(chatsRefreshTimer);
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(chatsChannel);
+      supabase.removeChannel(profilesChannel);
     };
   }, [session?.user?.id]);
 
@@ -389,6 +439,35 @@ function App() {
     setMessages(data || []);
   }
 
+  async function deleteMessage(messageId) {
+    const ok = confirm("Удалить сообщение у всех?");
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("messages")
+      .update({
+        is_deleted: true,
+        text: "",
+        image_url: null,
+      })
+      .eq("id", messageId)
+      .eq("sender_id", session.user.id);
+
+    if (error) {
+      console.error("DELETE MESSAGE ERROR:", error);
+      alert("Не удалось удалить сообщение");
+      return;
+    }
+
+    setMessages((current) => current.filter((msg) => msg.id !== messageId));
+
+    if (selectedChat?.id) {
+      await loadMessages(selectedChat.id);
+    }
+
+    await loadMyChats();
+  }
+
   async function sendMessage() {
     if (!text.trim() || !selectedChat?.id) return;
 
@@ -404,6 +483,7 @@ function App() {
       message_type: "text",
       created_at: new Date().toISOString(),
       pending: true,
+      is_deleted: false,
     };
 
     setMessages((current) => [...current, localMessage]);
@@ -417,6 +497,7 @@ function App() {
         text: messageText,
         image_url: null,
         message_type: "text",
+        is_deleted: false,
       })
       .select()
       .single();
@@ -453,6 +534,7 @@ function App() {
       message_type: "image",
       created_at: new Date().toISOString(),
       pending: true,
+      is_deleted: false,
     };
 
     setMessages((current) => [...current, localMessage]);
@@ -489,6 +571,7 @@ function App() {
         text: "",
         image_url: imageUrl,
         message_type: "image",
+        is_deleted: false,
       })
       .select()
       .single();
@@ -759,6 +842,16 @@ function App() {
                 <img className="chat-image" src={msg.image_url} alt="Фото" />
               ) : (
                 msg.text
+              )}
+
+              {msg.sender_id === session.user.id && !msg.pending && (
+                <button
+                  className="delete-message-btn"
+                  onClick={() => deleteMessage(msg.id)}
+                  title="Удалить сообщение"
+                >
+                  🗑
+                </button>
               )}
             </div>
           ))}
