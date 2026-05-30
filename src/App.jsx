@@ -443,7 +443,51 @@ useEffect(() => {
     setSearch("");
     setShowSidebar(true);
   }
+async function uploadAvatar(event) {
+  const file = event.target.files?.[0];
+  if (!file || !session?.user?.id) return;
 
+  const fileExt = file.name.split(".").pop();
+  const fileName = `${session.user.id}-${Date.now()}.${fileExt}`;
+  const filePath = `${session.user.id}/${fileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("avatars")
+    .upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: true,
+    });
+
+  if (uploadError) {
+    console.error("AVATAR UPLOAD ERROR:", uploadError);
+    alert("Ошибка загрузки аватарки");
+    return;
+  }
+
+  const { data } = supabase.storage
+    .from("avatars")
+    .getPublicUrl(filePath);
+
+  const avatarUrl = data.publicUrl;
+
+  const { error: updateError } = await supabase
+    .from("profiles")
+    .update({ avatar_url: avatarUrl })
+    .eq("id", session.user.id);
+
+  if (updateError) {
+    console.error("AVATAR UPDATE ERROR:", updateError);
+    alert("Ошибка сохранения аватарки");
+    return;
+  }
+
+  setProfile((current) => ({
+    ...current,
+    avatar_url: avatarUrl,
+  }));
+
+  await loadMyChats();
+}
   function renderAvatar(user) {
     if (user?.avatar_url) {
       return <img className="avatar-img" src={user.avatar_url} alt="avatar" />;
@@ -505,26 +549,27 @@ useEffect(() => {
   }
 
   return (
-    <div className="app">
-      <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
-        <div className="logo">
+    <><div className="logo">
+      <label className="profile-avatar">
+        <input type="file" accept="image/*" onChange={uploadAvatar} />
+        {profile?.avatar_url ? (
+          <img src={profile.avatar_url} alt="avatar" />
+        ) : (
           <span>🍬</span>
-          <div>
-            <h1>Ириска</h1>
-            <p>{profile?.username || session.user.email}</p>
-          </div>
-        </div>
+        )}
+      </label>
 
-        <button className="logout" onClick={logout}>
-          Выйти
-        </button>
-
-        <input
-          className="search-input"
-          placeholder="Найти пользователя..."
-          value={search}
-          onChange={(e) => searchUsers(e.target.value)}
-        />
+      <div>
+        <h1>Ириска</h1>
+        <p>{profile?.username || session.user.email}</p>
+      </div>
+    </div><button className="logout" onClick={logout}>
+        Выйти
+      </button><input
+        className="search-input"
+        placeholder="Найти пользователя..."
+        value={search}
+        onChange={(e) => searchUsers(e.target.value)} /></>
 
         {searchResults.length > 0 && (
           <div className="block">
