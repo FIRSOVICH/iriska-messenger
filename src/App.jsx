@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import { supabase } from "./supabase";
 
+const SITE_URL = "https://iriska-messenger.vercel.app";
+
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -24,28 +26,32 @@ function App() {
       setSession(session);
     });
 
-    return () => {
-      listener.subscription.unsubscribe();
-    };
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!session?.user) return;
 
-    loadProfile();
+    createProfileIfMissing();
     loadUsers();
     loadMessages();
   }, [session]);
 
   async function register() {
-    if (!email || !password || !username) {
+    if (!username || !email || !password) {
       setAuthMessage("Заполни логин, email и пароль");
       return;
     }
 
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        emailRedirectTo: SITE_URL,
+        data: {
+          username,
+        },
+      },
     });
 
     if (error) {
@@ -53,14 +59,7 @@ function App() {
       return;
     }
 
-    if (data.user) {
-      await supabase.from("profiles").insert({
-        id: data.user.id,
-        username,
-      });
-    }
-
-    setAuthMessage("Аккаунт создан. Теперь войди.");
+    setAuthMessage("Аккаунт создан. Проверь почту и подтверди регистрацию.");
     setMode("login");
   }
 
@@ -78,26 +77,60 @@ function App() {
     setAuthMessage("");
   }
 
-  async function loadProfile() {
-    const { data } = await supabase
+  async function createProfileIfMissing() {
+    const user = session.user;
+
+    const { data: existingProfile } = await supabase
       .from("profiles")
       .select("*")
-      .eq("id", session.user.id)
+      .eq("id", user.id)
       .single();
+
+    if (existingProfile) {
+      setProfile(existingProfile);
+      return;
+    }
+
+    const nameFromMeta = user.user_metadata?.username || user.email.split("@")[0];
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .insert({
+        id: user.id,
+        username: nameFromMeta,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("PROFILE CREATE ERROR:", error);
+      return;
+    }
 
     setProfile(data);
   }
 
   async function loadUsers() {
-    const { data } = await supabase.from("profiles").select("*");
+    const { data, error } = await supabase.from("profiles").select("*");
+
+    if (error) {
+      console.error("LOAD USERS ERROR:", error);
+      return;
+    }
+
     setUsers(data || []);
   }
 
   async function loadMessages() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("messages")
       .select("*")
       .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("LOAD MESSAGES ERROR:", error);
+      return;
+    }
 
     setMessages(data || []);
   }
@@ -107,14 +140,21 @@ function App() {
 
     if (!text.trim()) return;
 
-    const messageText = text.trim();
+    const localMessage = {
+      id: Date.now(),
+      sender_id: session.user.id,
+      text: text.trim(),
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((current) => [...current, localMessage]);
     setText("");
 
     const { data, error } = await supabase
       .from("messages")
       .insert({
         sender_id: session.user.id,
-        text: messageText,
+        text: localMessage.text,
       })
       .select()
       .single();
@@ -124,7 +164,9 @@ function App() {
       return;
     }
 
-    setMessages((currentMessages) => [...currentMessages, data]);
+    setMessages((current) =>
+      current.map((msg) => (msg.id === localMessage.id ? data : msg))
+    );
   }
 
   async function logout() {
@@ -167,7 +209,9 @@ function App() {
           </button>
 
           <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Войти"}
+            {mode === "login"
+              ? "Нет аккаунта? Регистрация"
+              : "Уже есть аккаунт? Войти"}
           </span>
 
           {authMessage && <p>{authMessage}</p>}
@@ -216,7 +260,9 @@ function App() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
+              className={`message ${
+                msg.sender_id === session.user.id ? "me" : "bot"
+              }`}
             >
               {msg.text}
             </div>
