@@ -81,12 +81,28 @@ function App() {
   async function sendMessage() {
     if (!text.trim()) return;
 
-    await supabase.from("messages").insert({
-      sender_id: session.user.id,
-      text: text.trim(),
-    });
-
+    const messageText = text.trim();
     setText("");
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        text: messageText,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    setMessages((currentMessages) => {
+      const exists = currentMessages.some((msg) => msg.id === data.id);
+      if (exists) return currentMessages;
+      return [...currentMessages, data];
+    });
   }
 
   async function logout() {
@@ -132,7 +148,7 @@ function App() {
         <header className="chat-header">
           <div>
             <h2>Общий чат Ириски</h2>
-            <p>Realtime сообщения через Supabase</p>
+            <p>сообщения сохраняются в Supabase</p>
           </div>
         </header>
 
