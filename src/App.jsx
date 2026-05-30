@@ -61,14 +61,17 @@ function App() {
           });
         }
       )
-      .subscribe((status) => {
-        console.log("REALTIME:", status);
-      });
+      .subscribe();
+
+    const interval = setInterval(() => {
+      loadMessages(selectedChat.id);
+    }, 1500);
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [selectedChat]);
+  }, [selectedChat?.id]);
 
   async function register() {
     if (!username || !email || !password) {
