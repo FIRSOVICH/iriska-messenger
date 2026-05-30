@@ -9,16 +9,20 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
 
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-      }
-    );
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
 
     return () => {
       listener.subscription.unsubscribe();
@@ -31,73 +35,69 @@ function App() {
     loadProfile();
     loadUsers();
     loadMessages();
-
-    const channel = supabase
-      .channel("messages-realtime")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-        },
-        (payload) => {
-          setMessages((currentMessages) => {
-            const exists = currentMessages.some(
-              (msg) => msg.id === payload.new.id
-            );
-
-            if (exists) return currentMessages;
-
-            return [...currentMessages, payload.new];
-          });
-        }
-      )
-      .subscribe((status) => {
-        console.log("REALTIME STATUS:", status);
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, [session]);
 
+  async function register() {
+    if (!email || !password || !username) {
+      setAuthMessage("Заполни логин, email и пароль");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    if (data.user) {
+      await supabase.from("profiles").insert({
+        id: data.user.id,
+        username,
+      });
+    }
+
+    setAuthMessage("Аккаунт создан. Теперь войди.");
+    setMode("login");
+  }
+
+  async function login() {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setAuthMessage("");
+  }
+
   async function loadProfile() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", session.user.id)
       .single();
 
-    if (error) {
-      console.error("LOAD PROFILE ERROR:", error);
-      return;
-    }
-
     setProfile(data);
   }
 
   async function loadUsers() {
-    const { data, error } = await supabase.from("profiles").select("*");
-
-    if (error) {
-      console.error("LOAD USERS ERROR:", error);
-      return;
-    }
-
+    const { data } = await supabase.from("profiles").select("*");
     setUsers(data || []);
   }
 
   async function loadMessages() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("messages")
       .select("*")
       .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error("LOAD MESSAGES ERROR:", error);
-      return;
-    }
 
     setMessages(data || []);
   }
@@ -124,15 +124,7 @@ function App() {
       return;
     }
 
-    console.log("MESSAGE SAVED:", data);
-
-    setMessages((currentMessages) => {
-      const exists = currentMessages.some((msg) => msg.id === data.id);
-
-      if (exists) return currentMessages;
-
-      return [...currentMessages, data];
-    });
+    setMessages((currentMessages) => [...currentMessages, data]);
   }
 
   async function logout() {
@@ -143,7 +135,45 @@ function App() {
   }
 
   if (!session) {
-    return <div className="app auth-page">Перезайди в аккаунт</div>;
+    return (
+      <div className="app auth-page">
+        <div className="auth-card">
+          <h1>🍬 Ириска</h1>
+          <p>Регистрация и вход</p>
+
+          {mode === "register" && (
+            <input
+              placeholder="Логин"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          )}
+
+          <input
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <input
+            placeholder="Пароль"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          <button onClick={mode === "login" ? login : register}>
+            {mode === "login" ? "Войти" : "Создать аккаунт"}
+          </button>
+
+          <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
+            {mode === "login" ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Войти"}
+          </span>
+
+          {authMessage && <p>{authMessage}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -186,9 +216,7 @@ function App() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message ${
-                msg.sender_id === session.user.id ? "me" : "bot"
-              }`}
+              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
             >
               {msg.text}
             </div>
