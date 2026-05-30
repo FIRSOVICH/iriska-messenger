@@ -49,12 +49,14 @@ function App() {
 
     const userId = data.user?.id;
 
-    if (userId) {
-      await supabase.from("profiles").insert({
-        id: userId,
-        username,
-      });
-    }
+  const result = await supabase
+  .from("profiles")
+  .insert({
+    id: userId,
+    username,
+  });
+
+console.log(result);
 
     setMessage("Аккаунт создан. Теперь войди.");
     setMode("login");
