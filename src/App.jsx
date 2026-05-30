@@ -10,6 +10,9 @@ function App() {
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedChat, setSelectedChat] = useState(null);
+  const [search, setSearch] = useState("");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -18,9 +21,7 @@ function App() {
   const [authMessage, setAuthMessage] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
@@ -31,10 +32,8 @@ function App() {
 
   useEffect(() => {
     if (!session?.user) return;
-
     createProfileIfMissing();
     loadUsers();
-    loadMessages();
   }, [session]);
 
   async function register() {
@@ -48,9 +47,7 @@ function App() {
       password,
       options: {
         emailRedirectTo: SITE_URL,
-        data: {
-          username,
-        },
+        data: { username },
       },
     });
 
@@ -64,10 +61,7 @@ function App() {
   }
 
   async function login() {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setAuthMessage(error.message);
@@ -121,10 +115,46 @@ function App() {
     setUsers(data || []);
   }
 
-  async function loadMessages() {
+  async function openChatWithUser(user) {
+    setSelectedUser(user);
+
+    const ids = [session.user.id, user.id].sort();
+    const user_one = ids[0];
+    const user_two = ids[1];
+
+    const { data: existingChat } = await supabase
+      .from("private_chats")
+      .select("*")
+      .eq("user_one", user_one)
+      .eq("user_two", user_two)
+      .single();
+
+    let chat = existingChat;
+
+    if (!chat) {
+      const { data: newChat, error } = await supabase
+        .from("private_chats")
+        .insert({ user_one, user_two })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("CREATE CHAT ERROR:", error);
+        return;
+      }
+
+      chat = newChat;
+    }
+
+    setSelectedChat(chat);
+    loadMessages(chat.id);
+  }
+
+  async function loadMessages(chatId) {
     const { data, error } = await supabase
       .from("messages")
       .select("*")
+      .eq("chat_id", chatId)
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -138,11 +168,12 @@ function App() {
   async function sendMessage() {
     console.log("SEND CLICK");
 
-    if (!text.trim()) return;
+    if (!text.trim() || !selectedChat) return;
 
     const localMessage = {
       id: Date.now(),
       sender_id: session.user.id,
+      chat_id: selectedChat.id,
       text: text.trim(),
       created_at: new Date().toISOString(),
     };
@@ -154,6 +185,7 @@ function App() {
       .from("messages")
       .insert({
         sender_id: session.user.id,
+        chat_id: selectedChat.id,
         text: localMessage.text,
       })
       .select()
@@ -174,7 +206,14 @@ function App() {
     setSession(null);
     setProfile(null);
     setMessages([]);
+    setSelectedUser(null);
+    setSelectedChat(null);
   }
+
+  const filteredUsers = users.filter((user) => {
+    if (user.id === session?.user?.id) return false;
+    return user.username.toLowerCase().includes(search.toLowerCase());
+  });
 
   if (!session) {
     return (
@@ -209,9 +248,7 @@ function App() {
           </button>
 
           <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login"
-              ? "Нет аккаунта? Регистрация"
-              : "Уже есть аккаунт? Войти"}
+            {mode === "login" ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Войти"}
           </span>
 
           {authMessage && <p>{authMessage}</p>}
@@ -235,13 +272,31 @@ function App() {
           Выйти
         </button>
 
+        <input
+          placeholder="Поиск пользователей..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "12px",
+            marginBottom: "14px",
+            borderRadius: "12px",
+            border: "none",
+            outline: "none",
+          }}
+        />
+
         <div className="chat-list">
-          {users.map((user) => (
-            <div className="chat-item" key={user.id}>
+          {filteredUsers.map((user) => (
+            <div
+              className={`chat-item ${selectedUser?.id === user.id ? "active" : ""}`}
+              key={user.id}
+              onClick={() => openChatWithUser(user)}
+            >
               <div className="avatar">👤</div>
               <div>
                 <h3>{user.username}</h3>
-                <p>{user.id === session.user.id ? "это ты" : "пользователь"}</p>
+                <p>нажми, чтобы открыть чат</p>
               </div>
             </div>
           ))}
@@ -251,18 +306,22 @@ function App() {
       <main className="chat">
         <header className="chat-header">
           <div>
-            <h2>Общий чат Ириски</h2>
-            <p>сообщения сохраняются в Supabase</p>
+            <h2>{selectedUser ? selectedUser.username : "Выбери пользователя"}</h2>
+            <p>{selectedUser ? "личный чат" : "поиск слева"}</p>
           </div>
         </header>
 
         <section className="messages">
+          {!selectedUser && (
+            <div className="message bot">
+              Найди пользователя слева и открой личный чат.
+            </div>
+          )}
+
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message ${
-                msg.sender_id === session.user.id ? "me" : "bot"
-              }`}
+              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
             >
               {msg.text}
             </div>
@@ -272,12 +331,17 @@ function App() {
         <footer className="input-area">
           <input
             value={text}
+            disabled={!selectedChat}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="Введите сообщение..."
+            placeholder={
+              selectedChat ? "Введите сообщение..." : "Сначала выбери пользователя"
+            }
           />
 
-          <button onClick={sendMessage}>Отправить</button>
+          <button onClick={sendMessage} disabled={!selectedChat}>
+            Отправить
+          </button>
         </footer>
       </main>
     </div>
