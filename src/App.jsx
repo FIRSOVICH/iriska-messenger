@@ -10,21 +10,48 @@ function App() {
   const [text, setText] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    if (session?.user) {
-      loadProfile();
-      loadUsers();
-      loadMessages();
-    }
+    if (!session?.user) return;
+
+    loadProfile();
+    loadUsers();
+    loadMessages();
+
+    const channel = supabase
+      .channel("messages-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+        },
+        (payload) => {
+          setMessages((currentMessages) => {
+            const exists = currentMessages.some((msg) => msg.id === payload.new.id);
+            if (exists) return currentMessages;
+            return [...currentMessages, payload.new];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [session]);
 
   async function loadProfile() {
@@ -56,17 +83,17 @@ function App() {
 
     await supabase.from("messages").insert({
       sender_id: session.user.id,
-      text,
+      text: text.trim(),
     });
 
     setText("");
-    loadMessages();
   }
 
   async function logout() {
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);
+    setMessages([]);
   }
 
   if (!session) {
@@ -84,7 +111,9 @@ function App() {
           </div>
         </div>
 
-        <button className="new-chat" onClick={logout}>Выйти</button>
+        <button className="new-chat" onClick={logout}>
+          Выйти
+        </button>
 
         <div className="chat-list">
           {users.map((user) => (
@@ -103,7 +132,7 @@ function App() {
         <header className="chat-header">
           <div>
             <h2>Общий чат Ириски</h2>
-            <p>сообщения сохраняются в Supabase</p>
+            <p>Realtime сообщения через Supabase</p>
           </div>
         </header>
 
@@ -111,7 +140,9 @@ function App() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message ${msg.sender_id === session.user.id ? "me" : "bot"}`}
+              className={`message ${
+                msg.sender_id === session.user.id ? "me" : "bot"
+              }`}
             >
               {msg.text}
             </div>
