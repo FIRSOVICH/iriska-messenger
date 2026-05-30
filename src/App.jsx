@@ -14,9 +14,11 @@ function App() {
       setSession(data.session);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setSession(session);
+      }
+    );
 
     return () => {
       listener.subscription.unsubscribe();
@@ -41,13 +43,19 @@ function App() {
         },
         (payload) => {
           setMessages((currentMessages) => {
-            const exists = currentMessages.some((msg) => msg.id === payload.new.id);
+            const exists = currentMessages.some(
+              (msg) => msg.id === payload.new.id
+            );
+
             if (exists) return currentMessages;
+
             return [...currentMessages, payload.new];
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("REALTIME STATUS:", status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -55,30 +63,48 @@ function App() {
   }, [session]);
 
   async function loadProfile() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", session.user.id)
       .single();
 
+    if (error) {
+      console.error("LOAD PROFILE ERROR:", error);
+      return;
+    }
+
     setProfile(data);
   }
 
   async function loadUsers() {
-    const { data } = await supabase.from("profiles").select("*");
+    const { data, error } = await supabase.from("profiles").select("*");
+
+    if (error) {
+      console.error("LOAD USERS ERROR:", error);
+      return;
+    }
+
     setUsers(data || []);
   }
 
   async function loadMessages() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("messages")
       .select("*")
       .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("LOAD MESSAGES ERROR:", error);
+      return;
+    }
 
     setMessages(data || []);
   }
 
   async function sendMessage() {
+    console.log("SEND CLICK");
+
     if (!text.trim()) return;
 
     const messageText = text.trim();
@@ -94,13 +120,17 @@ function App() {
       .single();
 
     if (error) {
-      console.error(error);
+      console.error("SEND MESSAGE ERROR:", error);
       return;
     }
 
+    console.log("MESSAGE SAVED:", data);
+
     setMessages((currentMessages) => {
       const exists = currentMessages.some((msg) => msg.id === data.id);
+
       if (exists) return currentMessages;
+
       return [...currentMessages, data];
     });
   }
@@ -172,6 +202,7 @@ function App() {
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
             placeholder="Введите сообщение..."
           />
+
           <button onClick={sendMessage}>Отправить</button>
         </footer>
       </main>
