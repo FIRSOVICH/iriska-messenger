@@ -8,6 +8,22 @@ import { isMobile, isUserOnline, getReplyPreview } from "./utils/chatUtils";
 
 const SITE_URL = "https://iriska-messenger.vercel.app";
 
+const CHAT_WALLPAPERS = [
+  { id: "aurora", label: "🌌 Аврора" },
+  { id: "candy", label: "🍬 Ириска" },
+  { id: "ocean", label: "🌊 Океан" },
+  { id: "sunset", label: "🌅 Закат" },
+  { id: "matrix", label: "💚 Матрица" },
+];
+
+const PROFILE_BACKGROUNDS = [
+  { id: "blue", label: "Синий" },
+  { id: "violet", label: "Фиолет" },
+  { id: "pink", label: "Розовый" },
+  { id: "green", label: "Зелёный" },
+  { id: "dark", label: "Тёмный" },
+];
+
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -49,6 +65,10 @@ function App() {
   const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
   const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
+  const [chatWallpaper, setChatWallpaper] = useState(() => localStorage.getItem("iriska_chat_wallpaper") || "aurora");
+  const [profileBioDraft, setProfileBioDraft] = useState("");
+  const [profileStatusDraft, setProfileStatusDraft] = useState("На работе");
+  const [profileBgDraft, setProfileBgDraft] = useState("blue");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -92,6 +112,12 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    setProfileBioDraft(profile?.bio || "");
+    setProfileStatusDraft(profile?.status || "На работе");
+    setProfileBgDraft(profile?.profile_bg || "blue");
+  }, [profile?.id, profile?.bio, profile?.status, profile?.profile_bg]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -150,10 +176,12 @@ function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.fontSize = chatFontSize;
     document.documentElement.dataset.bubbleStyle = bubbleStyle;
+    document.documentElement.dataset.wallpaper = chatWallpaper;
     localStorage.setItem("iriska_theme", theme);
     localStorage.setItem("iriska_chat_font_size", chatFontSize);
     localStorage.setItem("iriska_bubble_style", bubbleStyle);
-  }, [theme, chatFontSize, bubbleStyle]);
+    localStorage.setItem("iriska_chat_wallpaper", chatWallpaper);
+  }, [theme, chatFontSize, bubbleStyle, chatWallpaper]);
 
   useEffect(() => {
     localStorage.setItem("iriska_hide_online", hideOnline ? "1" : "0");
@@ -605,6 +633,39 @@ function App() {
     }, 2500);
   }
 
+
+  async function saveMyProfileSettings() {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    const nextBio = profileBioDraft.trim().slice(0, 160);
+    const nextStatus = profileStatusDraft.trim().slice(0, 40) || "На работе";
+    const nextBg = profileBgDraft || "blue";
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        bio: nextBio,
+        status: nextStatus,
+        profile_bg: nextBg,
+      })
+      .eq("id", currentSession.user.id);
+
+    if (error) {
+      console.error("PROFILE SETTINGS ERROR:", error);
+      alert("Не удалось сохранить профиль. Выполни SQL из файла SUPABASE_SQL_PROFILE_SETTINGS.sql");
+      return;
+    }
+
+    setProfile((current) => ({
+      ...current,
+      bio: nextBio,
+      status: nextStatus,
+      profile_bg: nextBg,
+    }));
+
+    alert("Профиль сохранён");
+  }
 
   async function requestMobileNotifications() {
     if (!("Notification" in window)) {
@@ -2309,7 +2370,7 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme}`} data-theme={theme}>
+    <div className={`app theme-${theme} wallpaper-${chatWallpaper}`} data-theme={theme} data-wallpaper={chatWallpaper}>
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
@@ -2433,7 +2494,21 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button className="back-btn" onClick={() => { setShowSidebar(true); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); }}>
+          <button
+            className="back-btn"
+            onClick={() => {
+              setIsChatOptionsOpen(false);
+              setIsUserProfileOpen(false);
+              setIsChatSearchOpen(false);
+              setEditingMessage(null);
+              setSelectedChat(null);
+              setSelectedUser(null);
+              setMessages([]);
+              setPinnedMessages([]);
+              setTypingUser(null);
+              setShowSidebar(true);
+            }}
+          >
             ←
           </button>
 
@@ -2875,6 +2950,61 @@ function App() {
                 <button type="button" className={chatFontSize === "normal" ? "active" : ""} onClick={() => setChatFontSize("normal")}>Обычный</button>
                 <button type="button" className={chatFontSize === "large" ? "active" : ""} onClick={() => setChatFontSize("large")}>Крупный</button>
               </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Обои чата</p>
+              <div className="appearance-buttons vertical wallpaper-buttons">
+                {CHAT_WALLPAPERS.map((wallpaper) => (
+                  <button
+                    key={wallpaper.id}
+                    type="button"
+                    className={chatWallpaper === wallpaper.id ? "active" : ""}
+                    onClick={() => setChatWallpaper(wallpaper.id)}
+                  >
+                    {wallpaper.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Мой профиль</p>
+              <input
+                className="appearance-input"
+                value={profileBioDraft}
+                maxLength={160}
+                onChange={(event) => setProfileBioDraft(event.target.value)}
+                placeholder="Описание пользователя"
+              />
+              <div className="appearance-buttons vertical">
+                {["На работе", "Сплю", "Не беспокоить", "В сети"].map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    className={profileStatusDraft === status ? "active" : ""}
+                    onClick={() => setProfileStatusDraft(status)}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+              <p className="appearance-subtitle">Фон профиля</p>
+              <div className="appearance-buttons vertical">
+                {PROFILE_BACKGROUNDS.map((bg) => (
+                  <button
+                    key={bg.id}
+                    type="button"
+                    className={profileBgDraft === bg.id ? "active" : ""}
+                    onClick={() => setProfileBgDraft(bg.id)}
+                  >
+                    {bg.label}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="appearance-save-btn" onClick={saveMyProfileSettings}>
+                💾 Сохранить профиль
+              </button>
             </div>
 
             <div className="appearance-section">
