@@ -42,6 +42,8 @@ function App() {
   const [editingMessage, setEditingMessage] = useState(null);
   const [isBlockedUsersOpen, setIsBlockedUsersOpen] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState([]);
+  const [fullscreenImage, setFullscreenImage] = useState(null);
+  const [theme, setTheme] = useState(() => localStorage.getItem("iriska_theme") || "dark");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -136,6 +138,19 @@ function App() {
 
   useEffect(() => {
     return () => cleanupVoiceMouseListeners();
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("iriska_theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.warn("SERVICE WORKER ERROR:", error);
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -373,7 +388,24 @@ function App() {
           ? `📄 ${message.file_name || "Файл"}`
           : message.text || "Новое сообщение";
 
-      new Notification(title, { body, icon: "/favicon.svg" });
+      if ("serviceWorker" in navigator && navigator.serviceWorker?.ready) {
+        navigator.serviceWorker.ready
+          .then((registration) => {
+            if (document.visibilityState === "hidden" && registration.showNotification) {
+              registration.showNotification(title, {
+                body,
+                icon: "/favicon.svg",
+                badge: "/favicon.svg",
+                tag: `iriska-${message.id || Date.now()}`,
+              });
+            } else {
+              new Notification(title, { body, icon: "/favicon.svg" });
+            }
+          })
+          .catch(() => new Notification(title, { body, icon: "/favicon.svg" }));
+      } else {
+        new Notification(title, { body, icon: "/favicon.svg" });
+      }
     } catch (error) {
       console.warn("NOTIFICATION ERROR:", error);
     }
@@ -467,6 +499,67 @@ function App() {
     typingTimeoutRef.current = setTimeout(() => {
       updateTypingStatus(false);
     }, 2500);
+  }
+
+
+  async function requestMobileNotifications() {
+    if (!("Notification" in window)) {
+      alert("Этот браузер не поддерживает уведомления. На iPhone установи Ириску на экран Домой через Safari → Поделиться → На экран Домой.");
+      return;
+    }
+
+    try {
+      if ("serviceWorker" in navigator) {
+        await navigator.serviceWorker.register("/sw.js");
+      }
+
+      const permission = await Notification.requestPermission();
+
+      if (permission === "granted") {
+        alert("Уведомления включены. На телефоне они стабильнее работают, если добавить сайт на экран Домой как приложение.");
+      } else {
+        alert("Уведомления не включены. Проверь разрешения сайта в настройках браузера.");
+      }
+    } catch (error) {
+      console.error("NOTIFICATION PERMISSION ERROR:", error);
+      alert("Не удалось включить уведомления. На iPhone открой сайт в Safari и добавь его на экран Домой.");
+    }
+  }
+
+  function toggleTheme() {
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
+  }
+
+  function restoreHiddenChats() {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    const ok = confirm("Вернуть скрытые/удалённые у себя чаты?");
+    if (!ok) return;
+
+    localStorage.removeItem(`iriska_hidden_chats_${currentSession.user.id}`);
+    hiddenChatIdsRef.current = [];
+    setHiddenChatIds([]);
+    loadMyChats();
+  }
+
+  function getFileDownloadUrl(message) {
+    if (!message?.file_url) return "#";
+    const fileName = encodeURIComponent(message.file_name || "file");
+    const separator = message.file_url.includes("?") ? "&" : "?";
+    return `${message.file_url}${separator}download=${fileName}`;
+  }
+
+  function openFileMessage(event, message) {
+    event.stopPropagation();
+    if (!message?.file_url) return;
+
+    const url = getFileDownloadUrl(message);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+
+    if (!opened) {
+      window.location.href = url;
+    }
   }
 
   async function updateOnlineStatus() {
@@ -2032,7 +2125,7 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app theme-${theme}`} data-theme={theme}>
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
@@ -2053,6 +2146,18 @@ function App() {
         <button className="logout" onClick={logout}>
           Выйти
         </button>
+
+        <div className="sidebar-action-grid">
+          <button type="button" className="sidebar-mini-action" onClick={requestMobileNotifications}>
+            🔔 Уведомления
+          </button>
+          <button type="button" className="sidebar-mini-action" onClick={toggleTheme}>
+            {theme === "dark" ? "☀️ Светлая" : "🌙 Тёмная"}
+          </button>
+          <button type="button" className="sidebar-mini-action" onClick={restoreHiddenChats}>
+            ↩️ Вернуть чаты
+          </button>
+        </div>
 
         <button
           type="button"
@@ -2343,7 +2448,15 @@ function App() {
               )}
 
               {msg.message_type === "image" && msg.image_url ? (
-                <img className="chat-image" src={msg.image_url} alt="Фото" />
+                <img
+                  className="chat-image"
+                  src={msg.image_url}
+                  alt="Фото"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setFullscreenImage(msg.image_url);
+                  }}
+                />
               ) : msg.message_type === "audio" && msg.audio_url ? (
                 <div className="voice-message clean-voice-message">
                   <span className="voice-icon">🎤</span>
@@ -2365,19 +2478,17 @@ function App() {
                   <span className="voice-label">{formatVoiceTime(msg.audio_duration || 0)}</span>
                 </div>
               ) : msg.message_type === "file" && msg.file_url ? (
-                <a
+                <button
+                  type="button"
                   className="file-message"
-                  href={msg.file_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(event) => event.stopPropagation()}
+                  onClick={(event) => openFileMessage(event, msg)}
                 >
                   <span className="file-icon">{getFileIcon(msg.file_name)}</span>
                   <span className="file-info">
                     <strong>{msg.file_name || "Файл"}</strong>
-                    <small>{formatFileSize(msg.file_size)}</small>
+                    <small>{formatFileSize(msg.file_size)} · нажми, чтобы скачать</small>
                   </span>
-                </a>
+                </button>
               ) : (
                 <>
                   {msg.text}
@@ -2557,6 +2668,14 @@ function App() {
               ))
             )}
           </div>
+        </div>
+      )}
+
+
+      {fullscreenImage && (
+        <div className="photo-viewer" onClick={() => setFullscreenImage(null)}>
+          <button type="button" className="photo-viewer-close" onClick={() => setFullscreenImage(null)}>×</button>
+          <img src={fullscreenImage} alt="Фото" onClick={(event) => event.stopPropagation()} />
         </div>
       )}
 
