@@ -1667,3 +1667,144 @@ input {
   color: #60a5fa !important;
   font-weight: 700;
 }
+
+/* === Blocked users / pinned jump / unread fix UI === */
+.blocked-users-btn {
+  width: 100%;
+  border: none;
+  border-radius: 16px;
+  padding: 13px 16px;
+  margin: 10px 0 14px;
+  background: rgba(30, 41, 59, 0.82);
+  color: #e5e7eb;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.blocked-users-btn:hover {
+  background: rgba(51, 65, 85, 0.95);
+}
+
+.blocked-users-modal {
+  width: min(440px, 94vw);
+  max-height: 78vh;
+  overflow: auto;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 24px;
+  padding: 16px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.65);
+}
+
+.blocked-users-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.blocked-users-header h3 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 20px;
+}
+
+.blocked-users-header button {
+  border: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  background: rgba(30, 41, 59, 0.95);
+  color: white;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.blocked-empty {
+  margin: 18px 0 6px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.blocked-users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blocked-user-item {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(30, 41, 59, 0.72);
+}
+
+.blocked-user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.blocked-user-info strong {
+  color: #f8fafc;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blocked-user-info span {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.blocked-user-item > button {
+  border: none;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pinned-message-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: rgba(15, 23, 42, 0.45);
+  color: #dbeafe;
+  border-radius: 12px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.pinned-message-item:hover {
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.message-jump-highlight {
+  outline: 2px solid rgba(34, 197, 94, 0.95);
+  box-shadow: 0 0 0 8px rgba(34, 197, 94, 0.16), 0 0 28px rgba(34, 197, 94, 0.45);
+  transition: box-shadow 0.25s ease, outline 0.25s ease;
+}
+
+@media (max-width: 768px) {
+  .blocked-user-item {
+    grid-template-columns: 44px 1fr;
+  }
+
+  .blocked-user-item > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}

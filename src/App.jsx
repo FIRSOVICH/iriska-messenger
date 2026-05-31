@@ -36,6 +36,8 @@ function App() {
   const [voicePlayer, setVoicePlayer] = useState({ id: null, playing: false });
   const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [isBlockedUsersOpen, setIsBlockedUsersOpen] = useState(false);
+  const [blockedProfiles, setBlockedProfiles] = useState([]);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -45,6 +47,7 @@ function App() {
 
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const messageElementsRef = useRef({});
   const messagesRef = useRef([]);
   const isAtBottomRef = useRef(true);
   const selectedChatRef = useRef(null);
@@ -529,11 +532,15 @@ function App() {
           .eq("is_deleted", false)
           .neq("sender_id", currentSession.user.id);
 
-        const unreadCount = (unreadMessages || []).filter((msg) => {
+        let unreadCount = (unreadMessages || []).filter((msg) => {
           if (hiddenIds.includes(msg.id)) return false;
           if (!lastRead) return true;
           return new Date(msg.created_at) > new Date(lastRead);
         }).length;
+
+        if (selectedChatRef.current?.id === chat.id) {
+          unreadCount = 0;
+        }
 
         return {
           ...chat,
@@ -649,7 +656,7 @@ function App() {
 
     await loadMessages(chat.id);
     await refreshTypingStatus(chat.id);
-    markChatAsRead(chat.id);
+    await markChatAsRead(chat.id);
     await loadMyChats();
 
     if (isMobile()) setShowSidebar(false);
@@ -666,7 +673,7 @@ function App() {
 
     await loadMessages(chat.id);
     await refreshTypingStatus(chat.id);
-    markChatAsRead(chat.id);
+    await markChatAsRead(chat.id);
 
     if (isMobile()) setShowSidebar(false);
   }
@@ -727,6 +734,41 @@ function App() {
     );
     blockedUserIdsRef.current = nextBlockedUserIds;
     setBlockedUserIds(nextBlockedUserIds);
+  }
+
+  async function loadBlockedProfiles(ids = blockedUserIdsRef.current) {
+    if (!ids || ids.length === 0) {
+      setBlockedProfiles([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .in("id", ids);
+
+    if (error) {
+      console.error("LOAD BLOCKED USERS ERROR:", error);
+      setBlockedProfiles([]);
+      return;
+    }
+
+    setBlockedProfiles(data || []);
+  }
+
+  async function openBlockedUsersPanel() {
+    await loadBlockedProfiles();
+    setIsBlockedUsersOpen(true);
+  }
+
+  async function unblockUser(userId) {
+    if (!userId) return;
+
+    const nextBlockedUserIds = blockedUserIds.filter((id) => id !== userId);
+    saveBlockedUsers(nextBlockedUserIds);
+    setBlockedProfiles((current) => current.filter((user) => user.id !== userId));
+
+    await loadMyChats();
   }
 
   function openChatMenu(chat) {
@@ -1074,7 +1116,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    markChatAsRead(selectedChat.id);
+    await markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -1164,7 +1206,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    markChatAsRead(selectedChat.id);
+    await markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -1276,6 +1318,19 @@ function App() {
     if (message.message_type === "image") return "📷 Фото";
     if (message.message_type === "audio") return "🎤 Голосовое";
     return message.text || "Сообщение";
+  }
+
+  function scrollToPinnedMessage(messageId) {
+    const element = messageElementsRef.current?.[messageId];
+
+    if (!element) return;
+
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    element.classList.add("message-jump-highlight");
+
+    setTimeout(() => {
+      element.classList.remove("message-jump-highlight");
+    }, 1400);
   }
 
   function cleanupVoiceMouseListeners() {
@@ -1585,7 +1640,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    markChatAsRead(selectedChat.id);
+    await markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -1724,6 +1779,10 @@ function App() {
 
         <button className="logout" onClick={logout}>
           Выйти
+        </button>
+
+        <button className="blocked-users-btn" type="button" onClick={openBlockedUsersPanel}>
+          🚫 Заблокированные
         </button>
 
         <input
@@ -1898,9 +1957,14 @@ function App() {
           <div className="pinned-messages-panel">
             <div className="pinned-title">📌 Закреплено</div>
             {pinnedMessages.slice(0, 3).map((message) => (
-              <div key={message.id} className="pinned-message-item">
+              <button
+                key={message.id}
+                type="button"
+                className="pinned-message-item"
+                onClick={() => scrollToPinnedMessage(message.id)}
+              >
                 {renderPinnedText(message)}
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -1920,6 +1984,14 @@ function App() {
           {messages.map((msg) => (
             <div
               key={msg.id}
+              ref={(element) => {
+                if (element) {
+                  messageElementsRef.current[msg.id] = element;
+                } else {
+                  delete messageElementsRef.current[msg.id];
+                }
+              }}
+              data-message-id={msg.id}
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
               } ${msg.message_type === "image" ? "image-message" : ""}`}
@@ -2091,6 +2163,36 @@ function App() {
         reactToMessage={reactToMessage}
         togglePinMessage={togglePinMessage}
       />
+
+      {isBlockedUsersOpen && (
+        <div className="message-menu-backdrop" onClick={() => setIsBlockedUsersOpen(false)}>
+          <div className="blocked-users-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="blocked-users-header">
+              <h3>🚫 Заблокированные</h3>
+              <button type="button" onClick={() => setIsBlockedUsersOpen(false)}>×</button>
+            </div>
+
+            {blockedProfiles.length === 0 ? (
+              <p className="blocked-empty">Заблокированных пользователей нет</p>
+            ) : (
+              <div className="blocked-users-list">
+                {blockedProfiles.map((user) => (
+                  <div className="blocked-user-item" key={user.id}>
+                    <div className="avatar">{renderAvatar(user)}</div>
+                    <div className="blocked-user-info">
+                      <strong>{user.username || "Пользователь"}</strong>
+                      <span>{isUserOnline(user) ? "онлайн" : "офлайн"}</span>
+                    </div>
+                    <button type="button" onClick={() => unblockUser(user.id)}>
+                      Разблокировать
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {actionChat && (
         <div className="message-menu-backdrop" onClick={closeChatMenu}>
