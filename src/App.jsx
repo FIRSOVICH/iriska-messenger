@@ -36,8 +36,12 @@ function App() {
   const [voicePlayer, setVoicePlayer] = useState({ id: null, playing: false });
   const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
+  const [messageSearch, setMessageSearch] = useState("");
+  const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+  const [editingMessage, setEditingMessage] = useState(null);
   const [isBlockedUsersOpen, setIsBlockedUsersOpen] = useState(false);
-  const [blockedProfiles, setBlockedProfiles] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -47,7 +51,6 @@ function App() {
 
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const messageElementsRef = useRef({});
   const messagesRef = useRef([]);
   const isAtBottomRef = useRef(true);
   const selectedChatRef = useRef(null);
@@ -60,6 +63,7 @@ function App() {
   const shouldSendVoiceRef = useRef(true);
   const recordingTouchStartYRef = useRef(null);
   const recordingMouseStartYRef = useRef(null);
+  const recordingStartedAtRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const activeAudioRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -125,12 +129,22 @@ function App() {
 
     setHiddenMessageIds(savedHiddenMessages ? JSON.parse(savedHiddenMessages) : []);
     setHiddenChatIds(savedHiddenChats ? JSON.parse(savedHiddenChats) : []);
-    setBlockedUserIds(savedBlockedUsers ? JSON.parse(savedBlockedUsers) : []);
+    const parsedBlockedUsers = savedBlockedUsers ? JSON.parse(savedBlockedUsers) : [];
+    setBlockedUserIds(parsedBlockedUsers);
+    loadBlockedUsers(parsedBlockedUsers);
   }, [session?.user?.id]);
 
   useEffect(() => {
     return () => cleanupVoiceMouseListeners();
   }, []);
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, [session?.user?.id]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -173,6 +187,10 @@ function App() {
               setMessages((current) => {
                 const exists = current.some((msg) => msg.id === payload.new.id);
                 if (exists) return current;
+
+                if (payload.new.sender_id !== currentSession?.user?.id) {
+                  showIncomingNotification(payload.new);
+                }
 
                 if (
                   payload.new.sender_id !== currentSession?.user?.id &&
@@ -331,6 +349,59 @@ function App() {
       .neq("sender_id", currentSession.user.id)
       .is("read_at", null);
 
+    loadMyChats();
+  }
+
+
+  function showIncomingNotification(message) {
+    try {
+      const currentSession = sessionRef.current || session;
+      if (!message || message.sender_id === currentSession?.user?.id) return;
+      if (!("Notification" in window)) return;
+      if (Notification.permission !== "granted") return;
+
+      const title = selectedUserRef.current?.id === message.sender_id
+        ? selectedUserRef.current?.username || "Ириска"
+        : "Ириска";
+
+      const body =
+        message.message_type === "image"
+          ? "📷 Фото"
+          : message.message_type === "audio"
+          ? "🎤 Голосовое"
+          : message.message_type === "file"
+          ? `📄 ${message.file_name || "Файл"}`
+          : message.text || "Новое сообщение";
+
+      new Notification(title, { body, icon: "/favicon.svg" });
+    } catch (error) {
+      console.warn("NOTIFICATION ERROR:", error);
+    }
+  }
+
+  async function loadBlockedUsers(ids = blockedUserIdsRef.current) {
+    if (!ids || ids.length === 0) {
+      setBlockedUsers([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .in("id", ids);
+
+    if (error) {
+      console.error("LOAD BLOCKED USERS ERROR:", error);
+      return;
+    }
+
+    setBlockedUsers(data || []);
+  }
+
+  function unblockUser(userId) {
+    const nextBlockedUserIds = blockedUserIds.filter((id) => id !== userId);
+    saveBlockedUsers(nextBlockedUserIds);
+    setBlockedUsers((current) => current.filter((user) => user.id !== userId));
     loadMyChats();
   }
 
@@ -532,21 +603,17 @@ function App() {
           .eq("is_deleted", false)
           .neq("sender_id", currentSession.user.id);
 
-        let unreadCount = (unreadMessages || []).filter((msg) => {
+        const unreadCount = (unreadMessages || []).filter((msg) => {
           if (hiddenIds.includes(msg.id)) return false;
           if (!lastRead) return true;
           return new Date(msg.created_at) > new Date(lastRead);
         }).length;
 
-        if (selectedChatRef.current?.id === chat.id) {
-          unreadCount = 0;
-        }
-
         return {
           ...chat,
           otherUser,
           lastMessage: visibleLastMessage,
-          unreadCount,
+          unreadCount: selectedChatRef.current?.id === chat.id ? 0 : unreadCount,
         };
       })
     );
@@ -656,7 +723,7 @@ function App() {
 
     await loadMessages(chat.id);
     await refreshTypingStatus(chat.id);
-    await markChatAsRead(chat.id);
+    markChatAsRead(chat.id);
     await loadMyChats();
 
     if (isMobile()) setShowSidebar(false);
@@ -673,7 +740,7 @@ function App() {
 
     await loadMessages(chat.id);
     await refreshTypingStatus(chat.id);
-    await markChatAsRead(chat.id);
+    markChatAsRead(chat.id);
 
     if (isMobile()) setShowSidebar(false);
   }
@@ -706,6 +773,19 @@ function App() {
     setMessages(visibleMessages);
     setPinnedMessages(visibleMessages.filter((msg) => msg.is_pinned));
 
+    const currentSession = sessionRef.current || session;
+    if (selectedChatRef.current?.id === chatId && currentSession?.user?.id) {
+      const now = new Date().toISOString();
+      localStorage.setItem(`iriska_read_${currentSession.user.id}_${chatId}`, now);
+      supabase
+        .from("messages")
+        .update({ delivered_at: now, read_at: now })
+        .eq("chat_id", chatId)
+        .neq("sender_id", currentSession.user.id)
+        .is("read_at", null)
+        .then(() => loadMyChats());
+    }
+
     if (hasNewMessage && !isAtBottomRef.current) {
       setNewMessagesCount((count) => count + 1);
     }
@@ -734,41 +814,7 @@ function App() {
     );
     blockedUserIdsRef.current = nextBlockedUserIds;
     setBlockedUserIds(nextBlockedUserIds);
-  }
-
-  async function loadBlockedProfiles(ids = blockedUserIdsRef.current) {
-    if (!ids || ids.length === 0) {
-      setBlockedProfiles([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .in("id", ids);
-
-    if (error) {
-      console.error("LOAD BLOCKED USERS ERROR:", error);
-      setBlockedProfiles([]);
-      return;
-    }
-
-    setBlockedProfiles(data || []);
-  }
-
-  async function openBlockedUsersPanel() {
-    await loadBlockedProfiles();
-    setIsBlockedUsersOpen(true);
-  }
-
-  async function unblockUser(userId) {
-    if (!userId) return;
-
-    const nextBlockedUserIds = blockedUserIds.filter((id) => id !== userId);
-    saveBlockedUsers(nextBlockedUserIds);
-    setBlockedProfiles((current) => current.filter((user) => user.id !== userId));
-
-    await loadMyChats();
+    loadBlockedUsers(nextBlockedUserIds);
   }
 
   function openChatMenu(chat) {
@@ -989,8 +1035,9 @@ function App() {
 
     const isImage = forwardMessage.message_type === "image" && forwardMessage.image_url;
     const isAudio = forwardMessage.message_type === "audio" && forwardMessage.audio_url;
+    const isFile = forwardMessage.message_type === "file" && forwardMessage.file_url;
     const forwardedText =
-      isImage || isAudio
+      isImage || isAudio || isFile
         ? ""
         : `↪ Переслано\n${forwardMessage.text || "сообщение"}`;
 
@@ -1002,7 +1049,11 @@ function App() {
         text: forwardedText,
         image_url: isImage ? forwardMessage.image_url : null,
         audio_url: isAudio ? forwardMessage.audio_url : null,
-        message_type: isImage ? "image" : isAudio ? "audio" : "text",
+        file_url: isFile ? forwardMessage.file_url : null,
+        file_name: isFile ? forwardMessage.file_name : null,
+        file_size: isFile ? forwardMessage.file_size : null,
+        file_type: isFile ? forwardMessage.file_type : null,
+        message_type: isImage ? "image" : isAudio ? "audio" : isFile ? "file" : "text",
         reactions: {},
         is_deleted: false,
       });
@@ -1033,6 +1084,8 @@ function App() {
         is_deleted: true,
         text: "",
         image_url: null,
+        audio_url: null,
+        file_url: null,
       })
       .eq("id", messageId)
       .eq("sender_id", session.user.id);
@@ -1057,8 +1110,56 @@ function App() {
     await loadMyChats();
   }
 
+  function startEditMessage(message) {
+    if (!message || message.sender_id !== session?.user?.id) return;
+    if (message.message_type !== "text") {
+      alert("Редактировать можно только текстовые сообщения");
+      return;
+    }
+    setEditingMessage(message);
+    setText(message.text || "");
+    closeMessageMenu();
+  }
+
+  async function saveEditedMessage() {
+    if (!editingMessage?.id || !text.trim()) return;
+
+    const nextText = text.trim();
+    const editedAt = new Date().toISOString();
+
+    setMessages((current) =>
+      current.map((msg) =>
+        msg.id === editingMessage.id
+          ? { ...msg, text: nextText, edited_at: editedAt }
+          : msg
+      )
+    );
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ text: nextText, edited_at: editedAt })
+      .eq("id", editingMessage.id)
+      .eq("sender_id", session.user.id);
+
+    if (error) {
+      console.error("EDIT MESSAGE ERROR:", error);
+      alert("Не удалось изменить сообщение");
+      if (selectedChat?.id) await loadMessages(selectedChat.id);
+      return;
+    }
+
+    setText("");
+    setEditingMessage(null);
+    await loadMyChats();
+  }
+
   async function sendMessage() {
     updateTypingStatus(false);
+
+    if (editingMessage) {
+      await saveEditedMessage();
+      return;
+    }
     if (!text.trim() || !selectedChat?.id) return;
 
     if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
@@ -1116,7 +1217,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    await markChatAsRead(selectedChat.id);
+    markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -1206,9 +1307,129 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    await markChatAsRead(selectedChat.id);
+    markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
+
+
+  async function sendFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file || !selectedChat?.id || !session?.user?.id) return;
+
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Файл не отправлен.");
+      return;
+    }
+
+    const maxSize = 25 * 1024 * 1024;
+    if (file.size > maxSize) {
+      alert("Файл слишком большой. Максимум 25 МБ.");
+      return;
+    }
+
+    const tempId = crypto.randomUUID();
+    const localMessage = {
+      id: tempId,
+      sender_id: session.user.id,
+      chat_id: selectedChat.id,
+      text: "",
+      image_url: null,
+      audio_url: null,
+      file_url: null,
+      file_name: file.name,
+      file_size: file.size,
+      file_type: file.type || "application/octet-stream",
+      message_type: "file",
+      reply_to_id: replyTo?.id || null,
+      reply_text: replyTo ? getReplyPreview(replyTo) : null,
+      reply_image_url: replyTo?.image_url || null,
+      reply_sender_id: replyTo?.sender_id || null,
+      reactions: {},
+      created_at: new Date().toISOString(),
+      pending: true,
+      is_deleted: false,
+    };
+
+    setMessages((current) => [...current, localMessage]);
+    setReplyTo(null);
+
+    const safeName = file.name.replace(/[^a-zA-Z0-9а-яА-ЯёЁ._-]/g, "_");
+    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${safeName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("chat-files")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type || "application/octet-stream",
+      });
+
+    if (uploadError) {
+      console.error("FILE UPLOAD ERROR:", uploadError);
+      alert("Ошибка загрузки файла");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    const { data: publicData } = supabase.storage
+      .from("chat-files")
+      .getPublicUrl(filePath);
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: selectedChat.id,
+        text: "",
+        image_url: null,
+        audio_url: null,
+        file_url: publicData.publicUrl,
+        file_name: file.name,
+        file_size: file.size,
+        file_type: file.type || "application/octet-stream",
+        message_type: "file",
+        reply_to_id: localMessage.reply_to_id,
+        reply_text: localMessage.reply_text,
+        reply_image_url: localMessage.reply_image_url,
+        reply_sender_id: localMessage.reply_sender_id,
+        reactions: {},
+        is_deleted: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("SEND FILE MESSAGE ERROR:", error);
+      alert("Ошибка отправки файла");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((msg) => (msg.id === tempId ? data : msg))
+    );
+
+    markChatAsRead(selectedChat.id);
+    await loadMyChats();
+  }
+
+  function formatFileSize(size) {
+    if (!size) return "";
+    if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} КБ`;
+    return `${(size / 1024 / 1024).toFixed(1)} МБ`;
+  }
+
+  function getFileIcon(fileName = "") {
+    const ext = fileName.split(".").pop()?.toLowerCase();
+    if (ext === "pdf") return "📕";
+    if (["doc", "docx"].includes(ext)) return "📘";
+    if (["xls", "xlsx"].includes(ext)) return "📗";
+    if (["zip", "rar", "7z"].includes(ext)) return "🗜️";
+    return "📄";
+  }
+
 
 
   function formatReactionSummary(reactions) {
@@ -1320,18 +1541,59 @@ function App() {
     return message.text || "Сообщение";
   }
 
-  function scrollToPinnedMessage(messageId) {
-    const element = messageElementsRef.current?.[messageId];
+  function jumpToMessage(messageId) {
+    if (!messageId) return;
 
+    const element = document.getElementById(`message-${messageId}`);
     if (!element) return;
 
     element.scrollIntoView({ behavior: "smooth", block: "center" });
-    element.classList.add("message-jump-highlight");
+    setHighlightedMessageId(messageId);
 
     setTimeout(() => {
-      element.classList.remove("message-jump-highlight");
-    }, 1400);
+      setHighlightedMessageId(null);
+    }, 1800);
   }
+
+  async function unpinMessage(messageId) {
+    if (!messageId) return;
+
+    setPinnedMessages((current) => current.filter((msg) => msg.id !== messageId));
+    setMessages((current) =>
+      current.map((msg) =>
+        msg.id === messageId ? { ...msg, is_pinned: false } : msg
+      )
+    );
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_pinned: false })
+      .eq("id", messageId);
+
+    if (error) {
+      console.error("UNPIN MESSAGE ERROR:", error);
+      alert("Не удалось открепить сообщение");
+      if (selectedChat?.id) await loadMessages(selectedChat.id);
+    }
+  }
+
+  const messageSearchResults = messageSearch.trim()
+    ? messages.filter((msg) => {
+        const query = messageSearch.trim().toLowerCase();
+        const content = [
+          msg.text,
+          msg.file_name,
+          msg.reply_text,
+          msg.message_type === "image" ? "фото" : "",
+          msg.message_type === "audio" ? "голосовое" : "",
+        ]
+          .filter(Boolean)
+          .join(" " )
+          .toLowerCase();
+
+        return content.includes(query);
+      })
+    : [];
 
   function cleanupVoiceMouseListeners() {
     window.removeEventListener("mousemove", handleVoiceDocumentMouseMove);
@@ -1389,6 +1651,7 @@ function App() {
       shouldSendVoiceRef.current = true;
       recordingTouchStartYRef.current = touchStartY;
       recordingMouseStartYRef.current = mouseStartY;
+      recordingStartedAtRef.current = Date.now();
 
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) {
@@ -1405,6 +1668,7 @@ function App() {
         });
 
         const shouldSend = shouldSendVoiceRef.current;
+        const duration = Math.max(1, Math.round((Date.now() - (recordingStartedAtRef.current || Date.now())) / 1000));
 
         voiceChunksRef.current = [];
         mediaRecorderRef.current = null;
@@ -1415,7 +1679,7 @@ function App() {
         setRecordingSeconds(0);
 
         if (shouldSend && audioBlob.size > 0) {
-          await sendVoice(audioBlob);
+          await sendVoice(audioBlob, duration);
         }
       };
 
@@ -1558,7 +1822,7 @@ function App() {
     });
   }
 
-  async function sendVoice(audioBlob) {
+  async function sendVoice(audioBlob, duration = 0) {
     updateTypingStatus(false);
     if (!audioBlob || !selectedChat?.id || !session?.user?.id) return;
 
@@ -1572,6 +1836,7 @@ function App() {
       text: "",
       image_url: null,
       audio_url: previewUrl,
+      audio_duration: duration,
       message_type: "audio",
       reply_to_id: replyTo?.id || null,
       reply_text: replyTo ? getReplyPreview(replyTo) : null,
@@ -1618,6 +1883,7 @@ function App() {
         text: "",
         image_url: null,
         audio_url: audioUrl,
+        audio_duration: duration,
         message_type: "audio",
         reply_to_id: localMessage.reply_to_id,
         reply_text: localMessage.reply_text,
@@ -1640,7 +1906,7 @@ function App() {
       current.map((msg) => (msg.id === tempId ? data : msg))
     );
 
-    await markChatAsRead(selectedChat.id);
+    markChatAsRead(selectedChat.id);
     await loadMyChats();
   }
 
@@ -1733,6 +1999,13 @@ function App() {
         : "🎤 Голосовое";
     }
 
+    if (chat.lastMessage.message_type === "file") {
+      const name = chat.lastMessage.file_name || "Файл";
+      return chat.lastMessage.sender_id === session.user.id
+        ? `Вы: 📄 ${name}`
+        : `📄 ${name}`;
+    }
+
     if (chat.lastMessage.sender_id === session.user.id) {
       return `Вы: ${chat.lastMessage.text || "сообщение"}`;
     }
@@ -1781,7 +2054,14 @@ function App() {
           Выйти
         </button>
 
-        <button className="blocked-users-btn" type="button" onClick={openBlockedUsersPanel}>
+        <button
+          type="button"
+          className="blocked-users-button"
+          onClick={() => {
+            loadBlockedUsers();
+            setIsBlockedUsersOpen(true);
+          }}
+        >
           🚫 Заблокированные
         </button>
 
@@ -1902,6 +2182,16 @@ function App() {
               <button
                 type="button"
                 onClick={() => {
+                  setIsChatSearchOpen(true);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🔍 Поиск по сообщениям
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setIsUserProfileOpen(true);
                   setIsChatOptionsOpen(false);
                 }}
@@ -1957,15 +2247,64 @@ function App() {
           <div className="pinned-messages-panel">
             <div className="pinned-title">📌 Закреплено</div>
             {pinnedMessages.slice(0, 3).map((message) => (
-              <button
-                key={message.id}
-                type="button"
-                className="pinned-message-item"
-                onClick={() => scrollToPinnedMessage(message.id)}
-              >
-                {renderPinnedText(message)}
-              </button>
+              <div key={message.id} className="pinned-message-item">
+                <button
+                  type="button"
+                  className="pinned-message-jump"
+                  onClick={() => jumpToMessage(message.id)}
+                >
+                  {renderPinnedText(message)}
+                </button>
+                <button
+                  type="button"
+                  className="pinned-unpin-btn"
+                  onClick={() => unpinMessage(message.id)}
+                  aria-label="Открепить"
+                >
+                  ×
+                </button>
+              </div>
             ))}
+          </div>
+        )}
+
+        {isChatSearchOpen && (
+          <div className="chat-search-panel">
+            <div className="chat-search-row">
+              <input
+                value={messageSearch}
+                onChange={(event) => setMessageSearch(event.target.value)}
+                placeholder="Поиск по сообщениям..."
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChatSearchOpen(false);
+                  setMessageSearch("");
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {messageSearch.trim() && (
+              <div className="chat-search-results">
+                {messageSearchResults.length === 0 ? (
+                  <p>Ничего не найдено</p>
+                ) : (
+                  messageSearchResults.slice(-8).reverse().map((message) => (
+                    <button
+                      key={message.id}
+                      type="button"
+                      onClick={() => jumpToMessage(message.id)}
+                    >
+                      {renderPinnedText(message)}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1984,17 +2323,10 @@ function App() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              ref={(element) => {
-                if (element) {
-                  messageElementsRef.current[msg.id] = element;
-                } else {
-                  delete messageElementsRef.current[msg.id];
-                }
-              }}
-              data-message-id={msg.id}
+              id={`message-${msg.id}`}
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
-              } ${msg.message_type === "image" ? "image-message" : ""}`}
+              } ${msg.message_type === "image" ? "image-message" : ""} ${highlightedMessageId === msg.id ? "message-highlight" : ""}`}
               onTouchStart={() => handleMessageTouchStart(msg)}
               onTouchEnd={handleMessageTouchEnd}
               onTouchMove={handleMessageTouchEnd}
@@ -2030,10 +2362,27 @@ function App() {
                       <span key={index} style={{ "--bar": `${(index % 5) + 1}` }} />
                     ))}
                   </div>
-                  <span className="voice-label">Голосовое</span>
+                  <span className="voice-label">{formatVoiceTime(msg.audio_duration || 0)}</span>
                 </div>
+              ) : msg.message_type === "file" && msg.file_url ? (
+                <a
+                  className="file-message"
+                  href={msg.file_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <span className="file-icon">{getFileIcon(msg.file_name)}</span>
+                  <span className="file-info">
+                    <strong>{msg.file_name || "Файл"}</strong>
+                    <small>{formatFileSize(msg.file_size)}</small>
+                  </span>
+                </a>
               ) : (
-                msg.text
+                <>
+                  {msg.text}
+                  {msg.edited_at && <span className="edited-label"> изменено</span>}
+                </>
               )}
 
               {formatReactionSummary(msg.reactions).length > 0 && (
@@ -2060,6 +2409,17 @@ function App() {
         )}
 
         <footer className="input-area-wrapper">
+          {editingMessage && (
+            <div className="reply-preview edit-preview">
+              <div>
+                <strong>Редактирование сообщения</strong>
+                <p>{editingMessage.text}</p>
+              </div>
+
+              <button onClick={() => { setEditingMessage(null); setText(""); }}>×</button>
+            </div>
+          )}
+
           {replyTo && (
             <div className="reply-preview">
               <div>
@@ -2097,9 +2457,17 @@ function App() {
               📎
               <input
                 type="file"
-                accept="image/*"
+                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
                 disabled={!selectedChat}
-                onChange={sendImage}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  if (file.type.startsWith("image/")) {
+                    sendImage(event);
+                  } else {
+                    sendFile(event);
+                  }
+                }}
               />
             </label>
 
@@ -2108,7 +2476,6 @@ function App() {
               className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
               disabled={!selectedChat}
               onMouseDown={startVoiceRecording}
-              onMouseMove={handleVoiceMouseMove}
               onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
               onMouseLeave={handleVoiceMouseLeave}
               onTouchStart={startVoiceRecording}
@@ -2129,7 +2496,7 @@ function App() {
             />
 
             <button onClick={sendMessage} disabled={!selectedChat}>
-              Отправить
+              {editingMessage ? "Сохранить" : "Отправить"}
             </button>
           </div>
         </footer>
@@ -2162,6 +2529,7 @@ function App() {
         forwardToChat={forwardToChat}
         reactToMessage={reactToMessage}
         togglePinMessage={togglePinMessage}
+        startEditMessage={startEditMessage}
       />
 
       {isBlockedUsersOpen && (
@@ -2172,23 +2540,21 @@ function App() {
               <button type="button" onClick={() => setIsBlockedUsersOpen(false)}>×</button>
             </div>
 
-            {blockedProfiles.length === 0 ? (
-              <p className="blocked-empty">Заблокированных пользователей нет</p>
+            {blockedUsers.length === 0 ? (
+              <p className="empty">Заблокированных пользователей нет</p>
             ) : (
-              <div className="blocked-users-list">
-                {blockedProfiles.map((user) => (
-                  <div className="blocked-user-item" key={user.id}>
-                    <div className="avatar">{renderAvatar(user)}</div>
-                    <div className="blocked-user-info">
-                      <strong>{user.username || "Пользователь"}</strong>
-                      <span>{isUserOnline(user) ? "онлайн" : "офлайн"}</span>
-                    </div>
-                    <button type="button" onClick={() => unblockUser(user.id)}>
-                      Разблокировать
-                    </button>
+              blockedUsers.map((user) => (
+                <div className="blocked-user-item" key={user.id}>
+                  <div className="avatar">{renderAvatar(user)}</div>
+                  <div>
+                    <strong>{user.username || "Пользователь"}</strong>
+                    <p>{isUserOnline(user) ? "онлайн" : "офлайн"}</p>
                   </div>
-                ))}
-              </div>
+                  <button type="button" onClick={() => unblockUser(user.id)}>
+                    Разблокировать
+                  </button>
+                </div>
+              ))
             )}
           </div>
         </div>
