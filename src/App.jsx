@@ -17,6 +17,9 @@ function App() {
   const [search, setSearch] = useState("");
   const [showSidebar, setShowSidebar] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
+  const [actionMessage, setActionMessage] = useState(null);
+  const [forwardMessage, setForwardMessage] = useState(null);
+  const [hiddenMessageIds, setHiddenMessageIds] = useState([]);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -28,6 +31,7 @@ function App() {
   const selectedChatRef = useRef(null);
   const selectedUserRef = useRef(null);
   const sessionRef = useRef(null);
+  const longPressTimerRef = useRef(null);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -40,6 +44,15 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setHiddenMessageIds([]);
+      return;
+    }
+
+    const saved = localStorage.getItem(`iriska_hidden_messages_${session.user.id}`);
+    setHiddenMessageIds(saved ? JSON.parse(saved) : []);
+  }, [session?.user?.id]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -439,7 +452,11 @@ function App() {
       return;
     }
 
-    setMessages(data || []);
+    const saved = localStorage.getItem(`iriska_hidden_messages_${sessionRef.current?.user?.id}`);
+    const hiddenIds = saved ? JSON.parse(saved) : [];
+    const visibleMessages = (data || []).filter((msg) => !hiddenIds.includes(msg.id));
+
+    setMessages(visibleMessages);
   }
 
   function getReplyPreview(message) {
@@ -457,6 +474,94 @@ function App() {
       image_url: message.image_url || null,
       message_type: message.message_type || "text",
     });
+  }
+
+  function openMessageMenu(message) {
+    if (!message || message.pending || message.is_deleted) return;
+    setActionMessage(message);
+  }
+
+  function closeMessageMenu() {
+    setActionMessage(null);
+  }
+
+  function handleMessageTouchStart(message) {
+    clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      openMessageMenu(message);
+    }, 520);
+  }
+
+  function handleMessageTouchEnd() {
+    clearTimeout(longPressTimerRef.current);
+  }
+
+  function handleMessageContextMenu(event, message) {
+    event.preventDefault();
+    openMessageMenu(message);
+  }
+
+  function replyFromMenu() {
+    if (!actionMessage) return;
+    startReply(actionMessage);
+    closeMessageMenu();
+  }
+
+  function deleteMessageForMe(messageId) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    const storageKey = `iriska_hidden_messages_${currentSession.user.id}`;
+    const saved = localStorage.getItem(storageKey);
+    const currentHiddenIds = saved ? JSON.parse(saved) : [];
+
+    const nextHiddenIds = Array.from(new Set([...currentHiddenIds, messageId]));
+
+    localStorage.setItem(storageKey, JSON.stringify(nextHiddenIds));
+    setHiddenMessageIds(nextHiddenIds);
+    setMessages((current) => current.filter((msg) => msg.id !== messageId));
+    closeMessageMenu();
+  }
+
+  function startForwardFromMenu() {
+    if (!actionMessage) return;
+    setForwardMessage(actionMessage);
+    closeMessageMenu();
+  }
+
+  async function forwardToChat(chat) {
+    if (!forwardMessage || !chat?.id || !session?.user?.id) return;
+
+    const isImage = forwardMessage.message_type === "image" && forwardMessage.image_url;
+    const forwardedText = isImage
+      ? ""
+      : `↪ Переслано\n${forwardMessage.text || "сообщение"}`;
+
+    const { error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: chat.id,
+        text: forwardedText,
+        image_url: isImage ? forwardMessage.image_url : null,
+        message_type: isImage ? "image" : "text",
+        is_deleted: false,
+      });
+
+    if (error) {
+      console.error("FORWARD MESSAGE ERROR:", error);
+      alert("Не удалось переслать сообщение");
+      return;
+    }
+
+    setForwardMessage(null);
+    await loadMyChats();
+
+    if (selectedChat?.id === chat.id) {
+      await loadMessages(chat.id);
+    }
+
+    alert("Сообщение переслано");
   }
 
   async function deleteMessage(messageId) {
@@ -489,6 +594,7 @@ function App() {
       await loadMessages(selectedChat.id);
     }
 
+    closeMessageMenu();
     await loadMyChats();
   }
 
@@ -689,6 +795,9 @@ function App() {
     setText("");
     setSearch("");
     setReplyTo(null);
+    setActionMessage(null);
+    setForwardMessage(null);
+    setHiddenMessageIds([]);
     setShowSidebar(true);
   }
 
@@ -880,6 +989,13 @@ function App() {
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
               } ${msg.message_type === "image" ? "image-message" : ""}`}
+              onTouchStart={() => handleMessageTouchStart(msg)}
+              onTouchEnd={handleMessageTouchEnd}
+              onTouchMove={handleMessageTouchEnd}
+              onMouseDown={() => handleMessageTouchStart(msg)}
+              onMouseUp={handleMessageTouchEnd}
+              onMouseLeave={handleMessageTouchEnd}
+              onContextMenu={(event) => handleMessageContextMenu(event, msg)}
             >
               {msg.reply_to_id && (
                 <div className="reply-inside">
@@ -893,26 +1009,6 @@ function App() {
               ) : (
                 msg.text
               )}
-
-              <div className="message-actions">
-                <button
-                  className="reply-message-btn"
-                  onClick={() => startReply(msg)}
-                  title="Ответить"
-                >
-                  ↩
-                </button>
-
-                {msg.sender_id === session.user.id && !msg.pending && (
-                  <button
-                    className="delete-message-btn"
-                    onClick={() => deleteMessage(msg.id)}
-                    title="Удалить сообщение"
-                  >
-                    🗑
-                  </button>
-                )}
-              </div>
             </div>
           ))}
 
@@ -958,6 +1054,64 @@ function App() {
           </div>
         </footer>
       </main>
+
+      {actionMessage && (
+        <div className="message-menu-backdrop" onClick={closeMessageMenu}>
+          <div className="message-action-menu" onClick={(e) => e.stopPropagation()}>
+            <div className="message-action-title">
+              {actionMessage.message_type === "image"
+                ? "📷 Фото"
+                : actionMessage.text || "Сообщение"}
+            </div>
+
+            <button onClick={replyFromMenu}>↩ Ответить</button>
+            <button onClick={startForwardFromMenu}>📤 Переслать</button>
+            <button onClick={() => deleteMessageForMe(actionMessage.id)}>
+              🧹 Удалить у себя
+            </button>
+
+            {actionMessage.sender_id === session.user.id && (
+              <button
+                className="danger-action"
+                onClick={() => deleteMessage(actionMessage.id)}
+              >
+                🗑 Удалить у всех
+              </button>
+            )}
+
+            <button className="cancel-action" onClick={closeMessageMenu}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+
+      {forwardMessage && (
+        <div className="message-menu-backdrop" onClick={() => setForwardMessage(null)}>
+          <div className="forward-menu" onClick={(e) => e.stopPropagation()}>
+            <h3>Кому переслать?</h3>
+
+            {myChats.length === 0 && (
+              <p className="empty">Нет чатов для пересылки</p>
+            )}
+
+            {myChats.map((chat) => (
+              <button
+                key={chat.id}
+                className="forward-chat-item"
+                onClick={() => forwardToChat(chat)}
+              >
+                <span className="avatar small-avatar">{renderAvatar(chat.otherUser)}</span>
+                <span>{chat.otherUser?.username || "Пользователь"}</span>
+              </button>
+            ))}
+
+            <button className="cancel-action" onClick={() => setForwardMessage(null)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

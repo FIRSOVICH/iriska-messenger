@@ -686,3 +686,66 @@ input {
 .reply-btn:hover {
   opacity: 1;
 }
+
+.message-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  z-index: 9999;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+}
+
+.message-action-menu,
+.forward-menu {
+  width: 100%;
+  max-width: 420px;
+  background: #111827;
+  border-radius: 24px;
+  padding: 14px;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.55);
+}
+
+.message-action-title {
+  padding: 12px;
+  color: #cbd5e1;
+  font-size: 14px;
+  max-height: 80px;
+  overflow: hidden;
+}
+
+.message-action-menu button,
+.forward-menu button {
+  width: 100%;
+  border: none;
+  margin-top: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.95);
+  color: white;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.danger-action {
+  background: rgba(239, 68, 68, 0.85) !important;
+}
+
+.cancel-action {
+  background: rgba(71, 85, 105, 0.9) !important;
+}
+
+.forward-chat-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.small-avatar {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+}
