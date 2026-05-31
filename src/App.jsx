@@ -74,6 +74,7 @@ function App() {
   const isVoiceLockedRef = useRef(false);
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
+  const notificationAudioRef = useRef(null);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -146,6 +147,24 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    function updateViewportHeight() {
+      const height = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
+    }
+
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
+
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
+    };
+  }, []);
+
+  useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch((error) => {
         console.warn("SERVICE WORKER ERROR:", error);
@@ -155,10 +174,7 @@ function App() {
 
   useEffect(() => {
     if (!session?.user?.id) return;
-    if (!("Notification" in window)) return;
-    if (Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
+    notificationAudioRef.current = notificationAudioRef.current || null;
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -368,48 +384,92 @@ function App() {
   }
 
 
+  function getNotificationSenderName(message) {
+    const currentChat = selectedChatRef.current;
+    const currentSelectedUser = selectedUserRef.current;
+
+    if (currentSelectedUser?.id === message?.sender_id) {
+      return currentSelectedUser.username || "Ириска";
+    }
+
+    const chat = myChats.find((item) => item.otherUser?.id === message?.sender_id);
+    return chat?.otherUser?.username || currentChat?.otherUser?.username || "Ириска";
+  }
+
+  function playNotificationSound() {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+      oscillator.frequency.setValueAtTime(660, audioContext.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, audioContext.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.22);
+
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.24);
+
+      setTimeout(() => audioContext.close?.(), 500);
+    } catch (error) {
+      console.warn("NOTIFICATION SOUND ERROR:", error);
+    }
+  }
+
+  function getNotificationBody(message) {
+    if (message.message_type === "image") return "📷 Фото";
+    if (message.message_type === "audio") return "🎤 Голосовое";
+    if (message.message_type === "file") return `📄 ${message.file_name || "Файл"}`;
+    return message.text || "Новое сообщение";
+  }
+
   function showIncomingNotification(message) {
     try {
       const currentSession = sessionRef.current || session;
       if (!message || message.sender_id === currentSession?.user?.id) return;
+
+      if (navigator.vibrate) {
+        navigator.vibrate([90, 40, 90]);
+      }
+
+      playNotificationSound();
+
       if (!("Notification" in window)) return;
       if (Notification.permission !== "granted") return;
 
-      const title = selectedUserRef.current?.id === message.sender_id
-        ? selectedUserRef.current?.username || "Ириска"
-        : "Ириска";
-
-      const body =
-        message.message_type === "image"
-          ? "📷 Фото"
-          : message.message_type === "audio"
-          ? "🎤 Голосовое"
-          : message.message_type === "file"
-          ? `📄 ${message.file_name || "Файл"}`
-          : message.text || "Новое сообщение";
+      const title = `Новое сообщение от ${getNotificationSenderName(message)}`;
+      const body = getNotificationBody(message);
+      const options = {
+        body,
+        icon: "/favicon.svg",
+        badge: "/favicon.svg",
+        tag: `iriska-${message.id || Date.now()}`,
+        renotify: true,
+        silent: false,
+      };
 
       if ("serviceWorker" in navigator && navigator.serviceWorker?.ready) {
         navigator.serviceWorker.ready
           .then((registration) => {
-            if (document.visibilityState === "hidden" && registration.showNotification) {
-              registration.showNotification(title, {
-                body,
-                icon: "/favicon.svg",
-                badge: "/favicon.svg",
-                tag: `iriska-${message.id || Date.now()}`,
-              });
+            if (registration.showNotification) {
+              registration.showNotification(title, options);
             } else {
-              new Notification(title, { body, icon: "/favicon.svg" });
+              new Notification(title, options);
             }
           })
-          .catch(() => new Notification(title, { body, icon: "/favicon.svg" }));
+          .catch(() => new Notification(title, options));
       } else {
-        new Notification(title, { body, icon: "/favicon.svg" });
+        new Notification(title, options);
       }
     } catch (error) {
       console.warn("NOTIFICATION ERROR:", error);
     }
   }
+
 
   async function loadBlockedUsers(ids = blockedUserIdsRef.current) {
     if (!ids || ids.length === 0) {
@@ -504,7 +564,7 @@ function App() {
 
   async function requestMobileNotifications() {
     if (!("Notification" in window)) {
-      alert("Этот браузер не поддерживает уведомления. На iPhone установи Ириску на экран Домой через Safari → Поделиться → На экран Домой.");
+      alert("Этот браузер не поддерживает уведомления. На iPhone нужны Safari, iOS 16.4+ и установка Ириски на экран Домой.");
       return;
     }
 
@@ -516,15 +576,37 @@ function App() {
       const permission = await Notification.requestPermission();
 
       if (permission === "granted") {
-        alert("Уведомления включены. На телефоне они стабильнее работают, если добавить сайт на экран Домой как приложение.");
+        localStorage.setItem("iriska_notifications_enabled", "1");
+        playNotificationSound();
+        navigator.vibrate?.([80, 40, 80]);
+
+        const title = "Ириска";
+        const body = "Уведомления включены";
+
+        if ("serviceWorker" in navigator && navigator.serviceWorker?.ready) {
+          const registration = await navigator.serviceWorker.ready;
+          await registration.showNotification(title, {
+            body,
+            icon: "/favicon.svg",
+            badge: "/favicon.svg",
+            tag: "iriska-test-notification",
+            renotify: true,
+            silent: false,
+          });
+        } else {
+          new Notification(title, { body, icon: "/favicon.svg" });
+        }
+
+        alert("Уведомления включены. Важно: если телефон полностью заблокирован, настоящие push-уведомления требуют отдельного push-сервера. Сейчас уведомления приходят, когда сайт/PWA активен или висит в фоне.");
       } else {
         alert("Уведомления не включены. Проверь разрешения сайта в настройках браузера.");
       }
     } catch (error) {
       console.error("NOTIFICATION PERMISSION ERROR:", error);
-      alert("Не удалось включить уведомления. На iPhone открой сайт в Safari и добавь его на экран Домой.");
+      alert("Не удалось включить уведомления. На iPhone открой сайт в Safari, добавь на экран Домой и разреши уведомления в настройках.");
     }
   }
+
 
   function toggleTheme() {
     setTheme((current) => (current === "dark" ? "light" : "dark"));
@@ -1405,6 +1487,19 @@ function App() {
   }
 
 
+  function getFileMimeType(file) {
+    if (file?.type) return file.type;
+
+    const name = file?.name?.toLowerCase() || "";
+    if (name.endsWith(".pdf")) return "application/pdf";
+    if (name.endsWith(".doc")) return "application/msword";
+    if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+    if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (name.endsWith(".zip")) return "application/zip";
+    return "application/octet-stream";
+  }
+
   async function sendFile(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1423,6 +1518,8 @@ function App() {
     }
 
     const tempId = crypto.randomUUID();
+    const uploadMimeType = getFileMimeType(file);
+
     const localMessage = {
       id: tempId,
       sender_id: session.user.id,
@@ -1433,7 +1530,7 @@ function App() {
       file_url: null,
       file_name: file.name,
       file_size: file.size,
-      file_type: file.type || "application/octet-stream",
+      file_type: uploadMimeType,
       message_type: "file",
       reply_to_id: replyTo?.id || null,
       reply_text: replyTo ? getReplyPreview(replyTo) : null,
@@ -1448,20 +1545,20 @@ function App() {
     setMessages((current) => [...current, localMessage]);
     setReplyTo(null);
 
-    const safeName = file.name.replace(/[^a-zA-Z0-9а-яА-ЯёЁ._-]/g, "_");
-    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${safeName}`;
+    const fileExt = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "bin";
+    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from("chat-files")
       .upload(filePath, file, {
         cacheControl: "3600",
         upsert: true,
-        contentType: file.type || "application/octet-stream",
+        contentType: uploadMimeType,
       });
 
     if (uploadError) {
       console.error("FILE UPLOAD ERROR:", uploadError);
-      alert("Ошибка загрузки файла");
+      alert(`Ошибка загрузки файла: ${uploadError.message || "проверь bucket chat-files и политики Storage"}`);
       setMessages((current) => current.filter((msg) => msg.id !== tempId));
       return;
     }
@@ -1481,7 +1578,7 @@ function App() {
         file_url: publicData.publicUrl,
         file_name: file.name,
         file_size: file.size,
-        file_type: file.type || "application/octet-stream",
+        file_type: uploadMimeType,
         message_type: "file",
         reply_to_id: localMessage.reply_to_id,
         reply_text: localMessage.reply_text,
