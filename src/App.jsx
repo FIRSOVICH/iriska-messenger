@@ -177,8 +177,16 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      const height = window.visualViewport?.height || window.innerHeight;
-      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
+
+      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
+
+      const keyboardIsOpen =
+        window.visualViewport &&
+        window.innerHeight - window.visualViewport.height > 120;
+
+      document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
     }
 
     updateViewportHeight();
@@ -2433,7 +2441,19 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button className="back-btn" onClick={() => { setShowSidebar(true); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); }}>
+          <button
+            className="back-btn"
+            onClick={() => {
+              setIsChatOptionsOpen(false);
+              setIsUserProfileOpen(false);
+              setActionMessage(null);
+              setForwardMessage(null);
+              setSelectedChat(null);
+              setSelectedUser(null);
+              setMessages([]);
+              setShowSidebar(true);
+            }}
+          >
             ←
           </button>
 
@@ -2472,91 +2492,6 @@ function App() {
             </button>
           )}
 
-          {isChatOptionsOpen && selectedChat && (
-            <div
-              className="chat-options-backdrop"
-              onMouseDown={() => setIsChatOptionsOpen(false)}
-              onTouchStart={() => setIsChatOptionsOpen(false)}
-            >
-              <div
-                className="chat-options-menu"
-                onMouseDown={(event) => event.stopPropagation()}
-                onTouchStart={(event) => event.stopPropagation()}
-                onClick={(event) => event.stopPropagation()}
-              >
-              <button
-                type="button"
-                onClick={() => {
-                  setIsChatSearchOpen(true);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                🔍 Поиск по сообщениям
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsUserProfileOpen(true);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                👤 Перейти в профиль
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  pokeSelectedUser();
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                👆 Ткнуть пользователя
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  clearChatHistoryForMe(selectedChat);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                🧹 Очистить историю у себя
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  clearChatHistoryForAll(selectedChat);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                🧨 Очистить историю у всех
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  deleteChatForMe(selectedChat);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                🗑 Удалить чат у себя
-              </button>
-
-              <button
-                type="button"
-                className="danger-action"
-                onClick={() => {
-                  blockUserFromChat(selectedChat);
-                  setIsChatOptionsOpen(false);
-                }}
-              >
-                🚫 Заблокировать пользователя
-              </button>
-              </div>
-            </div>
-          )}
         </header>
 
         {pinnedMessages.length > 0 && (
@@ -2823,6 +2758,99 @@ function App() {
           </div>
         </footer>
       </main>
+
+      {isChatOptionsOpen && selectedChat && (
+        <div
+          className="chat-options-backdrop"
+          onClick={() => setIsChatOptionsOpen(false)}
+        >
+          <div
+            className="chat-options-menu"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="chat-options-menu-title">Меню чата</div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsChatSearchOpen(true);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              🔍 Поиск по сообщениям
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsUserProfileOpen(true);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              👤 Перейти в профиль
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                pokeSelectedUser();
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              👆 Ткнуть пользователя
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                clearChatHistoryForMe(selectedChat);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              🧹 Очистить историю у себя
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                clearChatHistoryForAll(selectedChat);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              🧨 Очистить историю у всех
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                deleteChatForMe(selectedChat);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              🗑 Удалить чат у себя
+            </button>
+
+            <button
+              type="button"
+              className="danger-action"
+              onClick={() => {
+                blockUserFromChat(selectedChat);
+                setIsChatOptionsOpen(false);
+              }}
+            >
+              🚫 Заблокировать пользователя
+            </button>
+
+            <button
+              type="button"
+              className="cancel-action"
+              onClick={() => setIsChatOptionsOpen(false)}
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
 
       <UserProfile
         isOpen={isUserProfileOpen}
