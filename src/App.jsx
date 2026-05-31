@@ -22,6 +22,9 @@ function App() {
   const [actionMessage, setActionMessage] = useState(null);
   const [forwardMessage, setForwardMessage] = useState(null);
   const [hiddenMessageIds, setHiddenMessageIds] = useState([]);
+  const [hiddenChatIds, setHiddenChatIds] = useState([]);
+  const [blockedUserIds, setBlockedUserIds] = useState([]);
+  const [actionChat, setActionChat] = useState(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMessagesCount, setNewMessagesCount] = useState(0);
 
@@ -39,6 +42,9 @@ function App() {
   const selectedUserRef = useRef(null);
   const sessionRef = useRef(null);
   const longPressTimerRef = useRef(null);
+  const chatLongPressTimerRef = useRef(null);
+  const hiddenChatIdsRef = useRef([]);
+  const blockedUserIdsRef = useRef([]);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -61,13 +67,34 @@ function App() {
   }, [isAtBottom]);
 
   useEffect(() => {
+    hiddenChatIdsRef.current = hiddenChatIds;
+  }, [hiddenChatIds]);
+
+  useEffect(() => {
+    blockedUserIdsRef.current = blockedUserIds;
+  }, [blockedUserIds]);
+
+  useEffect(() => {
     if (!session?.user?.id) {
       setHiddenMessageIds([]);
+      setHiddenChatIds([]);
+      setBlockedUserIds([]);
       return;
     }
 
-    const saved = localStorage.getItem(`iriska_hidden_messages_${session.user.id}`);
-    setHiddenMessageIds(saved ? JSON.parse(saved) : []);
+    const savedHiddenMessages = localStorage.getItem(
+      `iriska_hidden_messages_${session.user.id}`
+    );
+    const savedHiddenChats = localStorage.getItem(
+      `iriska_hidden_chats_${session.user.id}`
+    );
+    const savedBlockedUsers = localStorage.getItem(
+      `iriska_blocked_users_${session.user.id}`
+    );
+
+    setHiddenMessageIds(savedHiddenMessages ? JSON.parse(savedHiddenMessages) : []);
+    setHiddenChatIds(savedHiddenChats ? JSON.parse(savedHiddenChats) : []);
+    setBlockedUserIds(savedBlockedUsers ? JSON.parse(savedBlockedUsers) : []);
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -382,11 +409,17 @@ function App() {
       })
     );
 
-    setMyChats(chats);
+    const visibleChats = chats.filter((chat) => {
+      if (hiddenChatIdsRef.current.includes(chat.id)) return false;
+      if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
+      return true;
+    });
+
+    setMyChats(visibleChats);
 
     const currentSelected = selectedChatRef.current;
     if (currentSelected?.id) {
-      const updated = chats.find((chat) => chat.id === currentSelected.id);
+      const updated = visibleChats.find((chat) => chat.id === currentSelected.id);
       if (updated) {
         setSelectedChat(updated);
         setSelectedUser(updated.otherUser);
@@ -414,10 +447,15 @@ function App() {
       return;
     }
 
-    setSearchResults(data || []);
+    setSearchResults((data || []).filter((user) => !blockedUserIdsRef.current.includes(user.id)));
   }
 
   async function openChatWithUser(user) {
+    if (blockedUserIdsRef.current.includes(user.id)) {
+      alert("Пользователь заблокирован. Сначала разблокируй его в настройках.");
+      return;
+    }
+
     const ids = [session.user.id, user.id].sort();
     const user_one = ids[0];
     const user_two = ids[1];
@@ -515,6 +553,144 @@ function App() {
     }
   }
 
+
+  function saveHiddenChats(nextHiddenChatIds) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    localStorage.setItem(
+      `iriska_hidden_chats_${currentSession.user.id}`,
+      JSON.stringify(nextHiddenChatIds)
+    );
+    hiddenChatIdsRef.current = nextHiddenChatIds;
+    setHiddenChatIds(nextHiddenChatIds);
+  }
+
+  function saveBlockedUsers(nextBlockedUserIds) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    localStorage.setItem(
+      `iriska_blocked_users_${currentSession.user.id}`,
+      JSON.stringify(nextBlockedUserIds)
+    );
+    blockedUserIdsRef.current = nextBlockedUserIds;
+    setBlockedUserIds(nextBlockedUserIds);
+  }
+
+  function openChatMenu(chat) {
+    if (!chat) return;
+    setActionChat(chat);
+  }
+
+  function closeChatMenu() {
+    setActionChat(null);
+  }
+
+  function handleChatTouchStart(chat) {
+    clearTimeout(chatLongPressTimerRef.current);
+    chatLongPressTimerRef.current = setTimeout(() => {
+      openChatMenu(chat);
+    }, 520);
+  }
+
+  function handleChatTouchEnd() {
+    clearTimeout(chatLongPressTimerRef.current);
+  }
+
+  function handleChatContextMenu(event, chat) {
+    event.preventDefault();
+    openChatMenu(chat);
+  }
+
+  async function deleteChatForMe(chat) {
+    if (!chat?.id) return;
+
+    const ok = confirm("Удалить чат у себя?");
+    if (!ok) return;
+
+    const nextHiddenChatIds = Array.from(new Set([...hiddenChatIds, chat.id]));
+    saveHiddenChats(nextHiddenChatIds);
+    setMyChats((current) => current.filter((item) => item.id !== chat.id));
+
+    if (selectedChat?.id === chat.id) {
+      setSelectedChat(null);
+      setSelectedUser(null);
+      setMessages([]);
+      setReplyTo(null);
+      if (isMobile()) setShowSidebar(true);
+    }
+
+    closeChatMenu();
+  }
+
+  async function clearChatHistoryForMe(chat) {
+    if (!chat?.id) return;
+
+    const ok = confirm("Очистить историю этого чата у себя?");
+    if (!ok) return;
+
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id")
+      .eq("chat_id", chat.id)
+      .eq("is_deleted", false);
+
+    if (error) {
+      console.error("CLEAR CHAT HISTORY ERROR:", error);
+      alert("Не удалось очистить историю");
+      return;
+    }
+
+    const storageKey = `iriska_hidden_messages_${currentSession.user.id}`;
+    const saved = localStorage.getItem(storageKey);
+    const currentHiddenIds = saved ? JSON.parse(saved) : [];
+    const messageIds = (data || []).map((message) => message.id);
+    const nextHiddenIds = Array.from(new Set([...currentHiddenIds, ...messageIds]));
+
+    localStorage.setItem(storageKey, JSON.stringify(nextHiddenIds));
+    setHiddenMessageIds(nextHiddenIds);
+
+    if (selectedChat?.id === chat.id) {
+      setMessages([]);
+      setReplyTo(null);
+    }
+
+    await loadMyChats();
+    closeChatMenu();
+  }
+
+  async function blockUserFromChat(chat) {
+    const otherUserId = chat?.otherUser?.id;
+    if (!otherUserId) return;
+
+    const ok = confirm(`Заблокировать ${chat.otherUser?.username || "пользователя"}?`);
+    if (!ok) return;
+
+    const nextBlockedUserIds = Array.from(new Set([...blockedUserIds, otherUserId]));
+    saveBlockedUsers(nextBlockedUserIds);
+
+    if (chat.id) {
+      const nextHiddenChatIds = Array.from(new Set([...hiddenChatIds, chat.id]));
+      saveHiddenChats(nextHiddenChatIds);
+    }
+
+    setMyChats((current) => current.filter((item) => item.otherUser?.id !== otherUserId));
+    setSearchResults((current) => current.filter((user) => user.id !== otherUserId));
+
+    if (selectedUser?.id === otherUserId) {
+      setSelectedChat(null);
+      setSelectedUser(null);
+      setMessages([]);
+      setReplyTo(null);
+      if (isMobile()) setShowSidebar(true);
+    }
+
+    closeChatMenu();
+  }
 
   function startReply(message) {
     if (message.is_deleted) return;
@@ -652,6 +828,11 @@ function App() {
   async function sendMessage() {
     if (!text.trim() || !selectedChat?.id) return;
 
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Сообщение не отправлено.");
+      return;
+    }
+
     const messageText = text.trim();
     const tempId = crypto.randomUUID();
 
@@ -711,6 +892,11 @@ function App() {
     event.target.value = "";
 
     if (!file || !selectedChat?.id || !session?.user?.id) return;
+
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Фото не отправлено.");
+      return;
+    }
 
     const tempId = crypto.randomUUID();
     const previewUrl = URL.createObjectURL(file);
@@ -848,7 +1034,10 @@ function App() {
     setReplyTo(null);
     setActionMessage(null);
     setForwardMessage(null);
+    setActionChat(null);
     setHiddenMessageIds([]);
+    setHiddenChatIds([]);
+    setBlockedUserIds([]);
     setShowSidebar(true);
   }
 
@@ -957,6 +1146,13 @@ function App() {
               className={`chat-item ${selectedChat?.id === chat.id ? "active" : ""}`}
               key={chat.id}
               onClick={() => openExistingChat(chat)}
+              onTouchStart={() => handleChatTouchStart(chat)}
+              onTouchEnd={handleChatTouchEnd}
+              onTouchMove={handleChatTouchEnd}
+              onMouseDown={() => handleChatTouchStart(chat)}
+              onMouseUp={handleChatTouchEnd}
+              onMouseLeave={handleChatTouchEnd}
+              onContextMenu={(event) => handleChatContextMenu(event, chat)}
             >
               <div className="avatar">{renderAvatar(chat.otherUser)}</div>
 
@@ -1100,6 +1296,42 @@ function App() {
         setForwardMessage={setForwardMessage}
         forwardToChat={forwardToChat}
       />
+
+      {actionChat && (
+        <div className="message-menu-backdrop" onClick={closeChatMenu}>
+          <div className="message-action-menu" onClick={(event) => event.stopPropagation()}>
+            <div className="message-action-title">
+              {actionChat.otherUser?.username || "Чат"}
+            </div>
+
+            <button
+              onClick={() => {
+                const chat = actionChat;
+                closeChatMenu();
+                openExistingChat(chat);
+              }}
+            >
+              💬 Открыть чат
+            </button>
+
+            <button onClick={() => clearChatHistoryForMe(actionChat)}>
+              🧹 Очистить историю у себя
+            </button>
+
+            <button onClick={() => deleteChatForMe(actionChat)}>
+              🗑 Удалить чат у себя
+            </button>
+
+            <button className="danger-action" onClick={() => blockUserFromChat(actionChat)}>
+              🚫 Заблокировать пользователя
+            </button>
+
+            <button className="cancel-action" onClick={closeChatMenu}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
