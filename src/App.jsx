@@ -44,6 +44,11 @@ function App() {
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("iriska_theme") || "dark");
+  const [hideOnline, setHideOnline] = useState(() => localStorage.getItem("iriska_hide_online") === "1");
+  const [notificationSound, setNotificationSound] = useState(() => localStorage.getItem("iriska_notification_sound") || "qweek");
+  const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
+  const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -143,8 +148,32 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.fontSize = chatFontSize;
+    document.documentElement.dataset.bubbleStyle = bubbleStyle;
     localStorage.setItem("iriska_theme", theme);
-  }, [theme]);
+    localStorage.setItem("iriska_chat_font_size", chatFontSize);
+    localStorage.setItem("iriska_bubble_style", bubbleStyle);
+  }, [theme, chatFontSize, bubbleStyle]);
+
+  useEffect(() => {
+    localStorage.setItem("iriska_hide_online", hideOnline ? "1" : "0");
+
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    if (hideOnline) {
+      supabase
+        .from("profiles")
+        .update({ online_at: null })
+        .eq("id", currentSession.user.id);
+    } else {
+      updateOnlineStatus();
+    }
+  }, [hideOnline]);
+
+  useEffect(() => {
+    localStorage.setItem("iriska_notification_sound", notificationSound);
+  }, [notificationSound]);
 
   useEffect(() => {
     function updateViewportHeight() {
@@ -396,25 +425,40 @@ function App() {
     return chat?.otherUser?.username || currentChat?.otherUser?.username || "Ириска";
   }
 
-  function playNotificationSound() {
+  function playNotificationSound(soundName = localStorage.getItem("iriska_notification_sound") || "qweek") {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
       const gain = audioContext.createGain();
-
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-      oscillator.frequency.setValueAtTime(660, audioContext.currentTime + 0.08);
-      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.18, audioContext.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.22);
-
-      oscillator.connect(gain);
       gain.connect(audioContext.destination);
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + 0.24);
+      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
 
-      setTimeout(() => audioContext.close?.(), 500);
+      const playTone = (frequency, startAt, duration, type = "sine", volume = 0.18) => {
+        const oscillator = audioContext.createOscillator();
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime + startAt);
+        oscillator.connect(gain);
+        gain.gain.exponentialRampToValueAtTime(volume, audioContext.currentTime + startAt + 0.01);
+        oscillator.start(audioContext.currentTime + startAt);
+        oscillator.stop(audioContext.currentTime + startAt + duration);
+      };
+
+      if (soundName === "oi") {
+        playTone(520, 0, 0.16, "triangle", 0.22);
+        playTone(390, 0.18, 0.18, "triangle", 0.2);
+      } else if (soundName === "glass") {
+        [1200, 1600, 2100, 900].forEach((freq, index) => {
+          playTone(freq, index * 0.045, 0.08, "square", 0.12);
+        });
+      } else if (soundName === "ding") {
+        playTone(1320, 0, 0.12, "sine", 0.2);
+        playTone(1760, 0.12, 0.18, "sine", 0.18);
+      } else {
+        playTone(880, 0, 0.09, "sine", 0.18);
+        playTone(660, 0.1, 0.12, "sine", 0.16);
+      }
+
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.55);
+      setTimeout(() => audioContext.close?.(), 800);
     } catch (error) {
       console.warn("NOTIFICATION SOUND ERROR:", error);
     }
@@ -647,6 +691,14 @@ function App() {
   async function updateOnlineStatus() {
     const currentSession = sessionRef.current || session;
     if (!currentSession?.user?.id) return;
+
+    if (localStorage.getItem("iriska_hide_online") === "1") {
+      await supabase
+        .from("profiles")
+        .update({ online_at: null })
+        .eq("id", currentSession.user.id);
+      return;
+    }
 
     await supabase
       .from("profiles")
@@ -1325,6 +1377,41 @@ function App() {
 
     setText("");
     setEditingMessage(null);
+    await loadMyChats();
+  }
+
+  async function pokeSelectedUser() {
+    if (!selectedChat?.id || !selectedUser?.id || !session?.user?.id) return;
+
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Ткнуть не получится.");
+      return;
+    }
+
+    const pokeText = `👆 ${profile?.username || "Пользователь"} ткнул тебя`;
+
+    const { error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: selectedChat.id,
+        text: pokeText,
+        image_url: null,
+        audio_url: null,
+        file_url: null,
+        message_type: "text",
+        reactions: {},
+        is_deleted: false,
+      });
+
+    if (error) {
+      console.error("POKE ERROR:", error);
+      alert("Не удалось ткнуть пользователя");
+      return;
+    }
+
+    playNotificationSound("ding");
+    await loadMessages(selectedChat.id);
     await loadMyChats();
   }
 
@@ -2254,6 +2341,12 @@ function App() {
           <button type="button" className="sidebar-mini-action" onClick={restoreHiddenChats}>
             ↩️ Вернуть чаты
           </button>
+          <button type="button" className="sidebar-mini-action" onClick={() => setHideOnline((value) => !value)}>
+            {hideOnline ? "🫥 Онлайн скрыт" : "👁️ Скрыть онлайн"}
+          </button>
+          <button type="button" className="sidebar-mini-action" onClick={() => setIsAppearanceOpen(true)}>
+            🎨 Оформление
+          </button>
         </div>
 
         <button
@@ -2340,7 +2433,7 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button className="back-btn" onClick={() => setShowSidebar(true)}>
+          <button className="back-btn" onClick={() => { setShowSidebar(true); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); }}>
             ←
           </button>
 
@@ -2399,6 +2492,16 @@ function App() {
                 }}
               >
                 👤 Перейти в профиль
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  pokeSelectedUser();
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                👆 Ткнуть пользователя
               </button>
 
               <button
@@ -2739,6 +2842,53 @@ function App() {
         togglePinMessage={togglePinMessage}
         startEditMessage={startEditMessage}
       />
+
+      {isAppearanceOpen && (
+        <div className="message-menu-backdrop" onClick={() => setIsAppearanceOpen(false)}>
+          <div className="appearance-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="blocked-users-header">
+              <h3>🎨 Оформление</h3>
+              <button type="button" onClick={() => setIsAppearanceOpen(false)}>×</button>
+            </div>
+
+            <div className="appearance-section">
+              <p>Тема</p>
+              <div className="appearance-buttons">
+                <button type="button" className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>🌙 Тёмная</button>
+                <button type="button" className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀️ Светлая</button>
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Пузырьки</p>
+              <div className="appearance-buttons">
+                <button type="button" className={bubbleStyle === "round" ? "active" : ""} onClick={() => setBubbleStyle("round")}>Круглые</button>
+                <button type="button" className={bubbleStyle === "compact" ? "active" : ""} onClick={() => setBubbleStyle("compact")}>Компактные</button>
+                <button type="button" className={bubbleStyle === "telegram" ? "active" : ""} onClick={() => setBubbleStyle("telegram")}>Telegram</button>
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Шрифт</p>
+              <div className="appearance-buttons">
+                <button type="button" className={chatFontSize === "small" ? "active" : ""} onClick={() => setChatFontSize("small")}>Мелкий</button>
+                <button type="button" className={chatFontSize === "normal" ? "active" : ""} onClick={() => setChatFontSize("normal")}>Обычный</button>
+                <button type="button" className={chatFontSize === "large" ? "active" : ""} onClick={() => setChatFontSize("large")}>Крупный</button>
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Звук уведомлений</p>
+              <div className="appearance-buttons vertical">
+                <button type="button" className={notificationSound === "qweek" ? "active" : ""} onClick={() => { setNotificationSound("qweek"); playNotificationSound("qweek"); }}>qweek</button>
+                <button type="button" className={notificationSound === "oi" ? "active" : ""} onClick={() => { setNotificationSound("oi"); playNotificationSound("oi"); }}>ой ой</button>
+                <button type="button" className={notificationSound === "glass" ? "active" : ""} onClick={() => { setNotificationSound("glass"); playNotificationSound("glass"); }}>бьющееся стекло</button>
+                <button type="button" className={notificationSound === "ding" ? "active" : ""} onClick={() => { setNotificationSound("ding"); playNotificationSound("ding"); }}>цзынь-цзынь</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isBlockedUsersOpen && (
         <div className="message-menu-backdrop" onClick={() => setIsBlockedUsersOpen(false)}>
