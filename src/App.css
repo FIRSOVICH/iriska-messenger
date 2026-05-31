@@ -1462,3 +1462,102 @@ input {
     right: 10px;
   }
 }
+
+
+/* ===== Iriska: typing, statuses, pinned, voice waves ===== */
+.typing-indicator {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #cbd5e1;
+  font-size: 13px;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+}
+
+.typing-dots {
+  display: inline-block;
+  margin-left: 3px;
+  animation: typingDots 1s infinite ease-in-out;
+}
+
+@keyframes typingDots {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+.pinned-messages-panel {
+  margin: 8px 14px 0;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: #e5e7eb;
+}
+
+.pinned-title {
+  font-size: 12px;
+  color: #93c5fd;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.pinned-message-item {
+  font-size: 13px;
+  line-height: 1.35;
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-status {
+  display: block;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1;
+  margin-top: 5px;
+  font-weight: 900;
+}
+
+.message-status.sent { color: #94a3b8; }
+.message-status.delivered { color: #38bdf8; }
+.message-status.read { color: #22c55e; }
+
+.voice-wave-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  min-width: 92px;
+}
+
+.voice-wave-bars span {
+  width: 3px;
+  height: calc(6px + var(--bar) * 3px);
+  border-radius: 999px;
+  background: rgba(147, 197, 253, 0.95);
+  animation: voiceWave 1s infinite ease-in-out;
+}
+
+.voice-wave-bars span:nth-child(2n) { animation-delay: 0.08s; }
+.voice-wave-bars span:nth-child(3n) { animation-delay: 0.16s; }
+.voice-wave-bars span:nth-child(4n) { animation-delay: 0.24s; }
+
+@keyframes voiceWave {
+  0%, 100% { transform: scaleY(0.65); opacity: 0.65; }
+  50% { transform: scaleY(1.18); opacity: 1; }
+}
+
+.clean-voice-message {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.voice-label {
+  font-size: 13px;
+  color: #cbd5e1;
+  white-space: nowrap;
+}

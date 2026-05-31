@@ -12,6 +12,7 @@ function MessageMenu({
   setForwardMessage,
   forwardToChat,
   reactToMessage,
+  togglePinMessage,
 }) {
   return (
     <>
@@ -39,6 +40,9 @@ function MessageMenu({
             </div>
 
             <button onClick={replyFromMenu}>↩ Ответить</button>
+            <button onClick={() => togglePinMessage(actionMessage)}>
+              {actionMessage?.is_pinned ? "📌 Открепить" : "📌 Закрепить"}
+            </button>
             <button onClick={startForwardFromMenu}>📤 Переслать</button>
             <button onClick={() => deleteMessageForMe(actionMessage.id)}>
               🧹 Удалить у себя

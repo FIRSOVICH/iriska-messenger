@@ -34,6 +34,8 @@ function App() {
   const [isVoiceLocked, setIsVoiceLocked] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [voicePlayer, setVoicePlayer] = useState({ id: null, playing: false });
+  const [typingUser, setTypingUser] = useState(null);
+  const [pinnedMessages, setPinnedMessages] = useState([]);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -57,6 +59,8 @@ function App() {
   const recordingMouseStartYRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const activeAudioRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const lastTypingUpdateRef = useRef(0);
   const isRecordingRef = useRef(false);
   const isVoiceLockedRef = useRef(false);
   const hiddenChatIdsRef = useRef([]);
@@ -195,7 +199,21 @@ function App() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "private_chats" },
-        async () => {
+        async (payload) => {
+          const currentChat = selectedChatRef.current;
+          const currentSession = sessionRef.current;
+          const updatedChat = payload.new;
+
+          if (currentChat?.id && updatedChat?.id === currentChat.id) {
+            const isOtherTyping =
+              updatedChat.typing_user_id &&
+              updatedChat.typing_user_id !== currentSession?.user?.id &&
+              updatedChat.typing_at &&
+              Date.now() - new Date(updatedChat.typing_at).getTime() < 6000;
+
+            setTypingUser(isOtherTyping ? selectedUserRef.current : null);
+          }
+
           await loadMyChats();
         }
       )
@@ -290,11 +308,57 @@ function App() {
     return `iriska_read_${session?.user?.id}_${chatId}`;
   }
 
-  function markChatAsRead(chatId) {
-    localStorage.setItem(getReadKey(chatId), new Date().toISOString());
+  async function markChatAsRead(chatId) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id || !chatId) return;
+
+    const now = new Date().toISOString();
+    localStorage.setItem(getReadKey(chatId), now);
+
+    await supabase
+      .from("messages")
+      .update({ delivered_at: now, read_at: now })
+      .eq("chat_id", chatId)
+      .neq("sender_id", currentSession.user.id)
+      .is("read_at", null);
+
     loadMyChats();
   }
 
+
+  async function updateTypingStatus(isTyping) {
+    const currentSession = sessionRef.current || session;
+    const currentChat = selectedChatRef.current;
+
+    if (!currentSession?.user?.id || !currentChat?.id) return;
+
+    await supabase
+      .from("private_chats")
+      .update({
+        typing_user_id: isTyping ? currentSession.user.id : null,
+        typing_at: isTyping ? new Date().toISOString() : null,
+      })
+      .eq("id", currentChat.id);
+  }
+
+  function handleTextChange(event) {
+    const value = event.target.value;
+    setText(value);
+
+    if (!selectedChatRef.current?.id || !sessionRef.current?.user?.id) return;
+
+    const now = Date.now();
+
+    if (value.trim() && now - lastTypingUpdateRef.current > 1500) {
+      lastTypingUpdateRef.current = now;
+      updateTypingStatus(true);
+    }
+
+    clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      updateTypingStatus(false);
+    }, 2500);
+  }
 
   async function updateOnlineStatus() {
     const currentSession = sessionRef.current || session;
@@ -451,6 +515,17 @@ function App() {
       return true;
     });
 
+    const deliverableChatIds = visibleChats.map((chat) => chat.id);
+
+    if (deliverableChatIds.length > 0) {
+      await supabase
+        .from("messages")
+        .update({ delivered_at: new Date().toISOString() })
+        .in("chat_id", deliverableChatIds)
+        .neq("sender_id", currentSession.user.id)
+        .is("delivered_at", null);
+    }
+
     setMyChats(visibleChats);
 
     const currentSelected = selectedChatRef.current;
@@ -585,6 +660,7 @@ function App() {
       previousLastId !== nextLastId;
 
     setMessages(visibleMessages);
+    setPinnedMessages(visibleMessages.filter((msg) => msg.is_pinned));
 
     if (hasNewMessage && !isAtBottomRef.current) {
       setNewMessagesCount((count) => count + 1);
@@ -715,7 +791,6 @@ function App() {
         is_deleted: true,
         text: "",
         image_url: null,
-        audio_url: null,
         audio_url: null,
       })
       .eq("chat_id", chat.id);
@@ -904,6 +979,7 @@ function App() {
   }
 
   async function sendMessage() {
+    updateTypingStatus(false);
     if (!text.trim() || !selectedChat?.id) return;
 
     if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
@@ -966,6 +1042,7 @@ function App() {
   }
 
   async function sendImage(event) {
+    updateTypingStatus(false);
     const file = event.target.files?.[0];
     event.target.value = "";
 
@@ -1105,6 +1182,63 @@ function App() {
 
     closeMessageMenu();
     await loadMyChats();
+  }
+
+  async function togglePinMessage(message) {
+    if (!message?.id) return;
+
+    const nextPinned = !message.is_pinned;
+
+    setMessages((current) =>
+      current.map((msg) =>
+        msg.id === message.id ? { ...msg, is_pinned: nextPinned } : msg
+      )
+    );
+
+    setPinnedMessages((current) => {
+      if (nextPinned) {
+        const exists = current.some((msg) => msg.id === message.id);
+        return exists ? current : [{ ...message, is_pinned: true }, ...current];
+      }
+
+      return current.filter((msg) => msg.id !== message.id);
+    });
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_pinned: nextPinned })
+      .eq("id", message.id);
+
+    if (error) {
+      console.error("PIN MESSAGE ERROR:", error);
+      alert("Не удалось закрепить сообщение");
+      if (selectedChat?.id) await loadMessages(selectedChat.id);
+      return;
+    }
+
+    closeMessageMenu();
+    await loadMyChats();
+  }
+
+  function renderMessageStatus(msg) {
+    if (!msg || msg.sender_id !== session?.user?.id || msg.pending) return null;
+
+    if (msg.read_at) {
+      return <span className="message-status read">✓✓</span>;
+    }
+
+    if (msg.delivered_at) {
+      return <span className="message-status delivered">✓✓</span>;
+    }
+
+    return <span className="message-status sent">✓</span>;
+  }
+
+  function renderPinnedText(message) {
+    if (!message) return "Сообщение";
+    if (message.message_type === "image") return "📷 Фото";
+    if (message.message_type === "audio") return "🎤 Голосовое";
+    return message.text || "Сообщение";
   }
 
   function cleanupVoiceMouseListeners() {
@@ -1333,6 +1467,7 @@ function App() {
   }
 
   async function sendVoice(audioBlob) {
+    updateTypingStatus(false);
     if (!audioBlob || !selectedChat?.id || !session?.user?.id) return;
 
     const tempId = crypto.randomUUID();
@@ -1720,6 +1855,24 @@ function App() {
           )}
         </header>
 
+        {pinnedMessages.length > 0 && (
+          <div className="pinned-messages-panel">
+            <div className="pinned-title">📌 Закреплено</div>
+            {pinnedMessages.slice(0, 3).map((message) => (
+              <div key={message.id} className="pinned-message-item">
+                {renderPinnedText(message)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {typingUser && (
+          <div className="typing-indicator">
+            <span>{typingUser.username || "Пользователь"} что-то колдует</span>
+            <span className="typing-dots">...</span>
+          </div>
+        )}
+
         <section className="messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
           {!selectedUser && (
             <div className="message bot">Выбери чат или найди пользователя.</div>
@@ -1761,6 +1914,11 @@ function App() {
                   >
                     {voicePlayer.id === msg.id && voicePlayer.playing ? "⏸" : "▶"}
                   </button>
+                  <div className="voice-wave-bars" aria-hidden="true">
+                    {Array.from({ length: 18 }).map((_, index) => (
+                      <span key={index} style={{ "--bar": `${(index % 5) + 1}` }} />
+                    ))}
+                  </div>
                   <span className="voice-label">Голосовое</span>
                 </div>
               ) : (
@@ -1776,6 +1934,8 @@ function App() {
                   ))}
                 </div>
               )}
+
+              {renderMessageStatus(msg)}
             </div>
           ))}
 
@@ -1850,7 +2010,7 @@ function App() {
             <input
               value={text}
               disabled={!selectedChat}
-              onChange={(e) => setText(e.target.value)}
+              onChange={handleTextChange}
               onKeyDown={(e) => e.key === "Enter" && sendMessage()}
               placeholder={
                 selectedChat ? "Введите сообщение..." : "Сначала выбери чат"
@@ -1890,6 +2050,7 @@ function App() {
         setForwardMessage={setForwardMessage}
         forwardToChat={forwardToChat}
         reactToMessage={reactToMessage}
+        togglePinMessage={togglePinMessage}
       />
 
       {actionChat && (
