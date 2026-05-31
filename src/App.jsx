@@ -29,6 +29,7 @@ function App() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMessagesCount, setNewMessagesCount] = useState(0);
   const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
+  const [isChatOptionsOpen, setIsChatOptionsOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isVoiceLocked, setIsVoiceLocked] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -53,6 +54,7 @@ function App() {
   const voiceChunksRef = useRef([]);
   const shouldSendVoiceRef = useRef(true);
   const recordingTouchStartYRef = useRef(null);
+  const recordingMouseStartYRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const activeAudioRef = useRef(null);
   const hiddenChatIdsRef = useRef([]);
@@ -394,7 +396,14 @@ function App() {
           .eq("chat_id", chat.id)
           .eq("is_deleted", false)
           .order("created_at", { ascending: false })
-          .limit(1);
+          .limit(50);
+
+        const savedHiddenMessages = localStorage.getItem(
+          `iriska_hidden_messages_${currentSession.user.id}`
+        );
+        const hiddenIds = savedHiddenMessages ? JSON.parse(savedHiddenMessages) : [];
+        const visibleLastMessage =
+          (lastMessages || []).find((msg) => !hiddenIds.includes(msg.id)) || null;
 
         const lastRead = localStorage.getItem(
           `iriska_read_${currentSession.user.id}_${chat.id}`
@@ -408,6 +417,7 @@ function App() {
           .neq("sender_id", currentSession.user.id);
 
         const unreadCount = (unreadMessages || []).filter((msg) => {
+          if (hiddenIds.includes(msg.id)) return false;
           if (!lastRead) return true;
           return new Date(msg.created_at) > new Date(lastRead);
         }).length;
@@ -415,7 +425,7 @@ function App() {
         return {
           ...chat,
           otherUser,
-          lastMessage: lastMessages?.[0] || null,
+          lastMessage: visibleLastMessage,
           unreadCount,
         };
       })
@@ -509,6 +519,7 @@ function App() {
     setReplyTo(null);
     setIsAtBottom(true);
     setNewMessagesCount(0);
+    setIsChatOptionsOpen(false);
     setSearch("");
     setSearchResults([]);
 
@@ -526,6 +537,7 @@ function App() {
     setReplyTo(null);
     setIsAtBottom(true);
     setNewMessagesCount(0);
+    setIsChatOptionsOpen(false);
 
     await loadMessages(chat.id);
     markChatAsRead(chat.id);
@@ -634,6 +646,7 @@ function App() {
     }
 
     closeChatMenu();
+    setIsChatOptionsOpen(false);
   }
 
   async function clearChatHistoryForMe(chat) {
@@ -673,6 +686,40 @@ function App() {
 
     await loadMyChats();
     closeChatMenu();
+    setIsChatOptionsOpen(false);
+  }
+
+  async function clearChatHistoryForAll(chat) {
+    if (!chat?.id) return;
+
+    const ok = confirm("Очистить историю этого чата у всех?");
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("messages")
+      .update({
+        is_deleted: true,
+        text: "",
+        image_url: null,
+        audio_url: null,
+        audio_url: null,
+      })
+      .eq("chat_id", chat.id);
+
+    if (error) {
+      console.error("CLEAR CHAT HISTORY FOR ALL ERROR:", error);
+      alert("Не удалось очистить историю у всех. Проверь RLS-политику update для messages.");
+      return;
+    }
+
+    if (selectedChat?.id === chat.id) {
+      setMessages([]);
+      setReplyTo(null);
+    }
+
+    await loadMyChats();
+    closeChatMenu();
+    setIsChatOptionsOpen(false);
   }
 
   async function blockUserFromChat(chat) {
@@ -702,6 +749,7 @@ function App() {
     }
 
     closeChatMenu();
+    setIsChatOptionsOpen(false);
   }
 
   function startReply(message) {
@@ -1067,6 +1115,8 @@ function App() {
       voiceChunksRef.current = [];
       shouldSendVoiceRef.current = true;
       recordingTouchStartYRef.current = event?.touches?.[0]?.clientY || null;
+      recordingMouseStartYRef.current =
+        typeof event?.clientY === "number" ? event.clientY : null;
 
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) {
@@ -1139,6 +1189,19 @@ function App() {
 
     const startY = recordingTouchStartYRef.current;
     const currentY = event?.touches?.[0]?.clientY;
+
+    if (!startY || !currentY) return;
+
+    if (startY - currentY > 70) {
+      setIsVoiceLocked(true);
+    }
+  }
+
+  function handleVoiceMouseMove(event) {
+    if (!isRecording || isVoiceLocked) return;
+
+    const startY = recordingMouseStartYRef.current;
+    const currentY = typeof event?.clientY === "number" ? event.clientY : null;
 
     if (!startY || !currentY) return;
 
@@ -1524,6 +1587,72 @@ function App() {
               </p>
             </div>
           </button>
+
+          {selectedChat && (
+            <button
+              type="button"
+              className="chat-options-btn"
+              onClick={() => setIsChatOptionsOpen((value) => !value)}
+              aria-label="Меню чата"
+            >
+              ⋮
+            </button>
+          )}
+
+          {isChatOptionsOpen && selectedChat && (
+            <div className="chat-options-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsUserProfileOpen(true);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                👤 Перейти в профиль
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  clearChatHistoryForMe(selectedChat);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🧹 Очистить историю у себя
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  clearChatHistoryForAll(selectedChat);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🧨 Очистить историю у всех
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  deleteChatForMe(selectedChat);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🗑 Удалить чат у себя
+              </button>
+
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => {
+                  blockUserFromChat(selectedChat);
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🚫 Заблокировать пользователя
+              </button>
+            </div>
+          )}
         </header>
 
         <section className="messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
@@ -1643,6 +1772,7 @@ function App() {
               className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
               disabled={!selectedChat}
               onMouseDown={startVoiceRecording}
+              onMouseMove={handleVoiceMouseMove}
               onMouseUp={() => !isVoiceLocked && stopVoiceRecording({ send: true })}
               onMouseLeave={handleVoiceMouseLeave}
               onTouchStart={startVoiceRecording}
@@ -1716,6 +1846,10 @@ function App() {
 
             <button onClick={() => clearChatHistoryForMe(actionChat)}>
               🧹 Очистить историю у себя
+            </button>
+
+            <button onClick={() => clearChatHistoryForAll(actionChat)}>
+              🧨 Очистить историю у всех
             </button>
 
             <button onClick={() => deleteChatForMe(actionChat)}>
