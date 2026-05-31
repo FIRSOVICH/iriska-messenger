@@ -749,3 +749,10 @@ input {
   height: 34px;
   min-width: 34px;
 }
+
+.message-actions,
+.reply-btn,
+.reply-message-btn,
+.delete-message-btn {
+  display: none !important;
+}
