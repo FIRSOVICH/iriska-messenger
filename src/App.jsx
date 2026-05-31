@@ -57,6 +57,8 @@ function App() {
   const recordingMouseStartYRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const activeAudioRef = useRef(null);
+  const isRecordingRef = useRef(false);
+  const isVoiceLockedRef = useRef(false);
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
 
@@ -79,6 +81,14 @@ function App() {
   useEffect(() => {
     isAtBottomRef.current = isAtBottom;
   }, [isAtBottom]);
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    isVoiceLockedRef.current = isVoiceLocked;
+  }, [isVoiceLocked]);
 
   useEffect(() => {
     hiddenChatIdsRef.current = hiddenChatIds;
@@ -110,6 +120,10 @@ function App() {
     setHiddenChatIds(savedHiddenChats ? JSON.parse(savedHiddenChats) : []);
     setBlockedUserIds(savedBlockedUsers ? JSON.parse(savedBlockedUsers) : []);
   }, [session?.user?.id]);
+
+  useEffect(() => {
+    return () => cleanupVoiceMouseListeners();
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -1093,8 +1107,41 @@ function App() {
     await loadMyChats();
   }
 
+  function cleanupVoiceMouseListeners() {
+    window.removeEventListener("mousemove", handleVoiceDocumentMouseMove);
+    window.removeEventListener("mouseup", handleVoiceDocumentMouseUp);
+  }
+
+  function handleVoiceDocumentMouseMove(event) {
+    if (!isRecordingRef.current || isVoiceLockedRef.current) return;
+
+    const startY = recordingMouseStartYRef.current;
+    const currentY = typeof event?.clientY === "number" ? event.clientY : null;
+
+    if (startY === null || currentY === null) return;
+
+    if (startY - currentY > 55) {
+      isVoiceLockedRef.current = true;
+      setIsVoiceLocked(true);
+    }
+  }
+
+  function handleVoiceDocumentMouseUp() {
+    cleanupVoiceMouseListeners();
+
+    if (!isRecordingRef.current) return;
+
+    if (!isVoiceLockedRef.current) {
+      stopVoiceRecording({ send: true });
+    }
+  }
+
   async function startVoiceRecording(event) {
     event?.preventDefault?.();
+
+    const isMouseStart = event?.type === "mousedown";
+    const mouseStartY = typeof event?.clientY === "number" ? event.clientY : null;
+    const touchStartY = event?.touches?.[0]?.clientY || null;
 
     if (!selectedChat?.id || !session?.user?.id || isRecording) return;
 
@@ -1114,9 +1161,8 @@ function App() {
 
       voiceChunksRef.current = [];
       shouldSendVoiceRef.current = true;
-      recordingTouchStartYRef.current = event?.touches?.[0]?.clientY || null;
-      recordingMouseStartYRef.current =
-        typeof event?.clientY === "number" ? event.clientY : null;
+      recordingTouchStartYRef.current = touchStartY;
+      recordingMouseStartYRef.current = mouseStartY;
 
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) {
@@ -1136,6 +1182,8 @@ function App() {
 
         voiceChunksRef.current = [];
         mediaRecorderRef.current = null;
+        isRecordingRef.current = false;
+        isVoiceLockedRef.current = false;
         setIsRecording(false);
         setIsVoiceLocked(false);
         setRecordingSeconds(0);
@@ -1147,8 +1195,16 @@ function App() {
 
       mediaRecorderRef.current = recorder;
       recorder.start();
+      isRecordingRef.current = true;
+      isVoiceLockedRef.current = false;
       setIsRecording(true);
       setIsVoiceLocked(false);
+
+      if (isMouseStart) {
+        cleanupVoiceMouseListeners();
+        window.addEventListener("mousemove", handleVoiceDocumentMouseMove);
+        window.addEventListener("mouseup", handleVoiceDocumentMouseUp);
+      }
       setRecordingSeconds(0);
 
       clearInterval(recordingTimerRef.current);
@@ -1158,6 +1214,8 @@ function App() {
     } catch (error) {
       console.error("VOICE RECORD ERROR:", error);
       clearInterval(recordingTimerRef.current);
+      isRecordingRef.current = false;
+      isVoiceLockedRef.current = false;
       setIsRecording(false);
       setIsVoiceLocked(false);
       setRecordingSeconds(0);
@@ -1166,11 +1224,17 @@ function App() {
   }
 
   function stopVoiceRecording({ send = true } = {}) {
+    cleanupVoiceMouseListeners();
+
     const recorder = mediaRecorderRef.current;
     shouldSendVoiceRef.current = send;
 
     if (!recorder || recorder.state === "inactive") {
       clearInterval(recordingTimerRef.current);
+      isRecordingRef.current = false;
+      isVoiceLockedRef.current = false;
+      isRecordingRef.current = false;
+      isVoiceLockedRef.current = false;
       setIsRecording(false);
       setIsVoiceLocked(false);
       setRecordingSeconds(0);
@@ -1192,7 +1256,8 @@ function App() {
 
     if (!startY || !currentY) return;
 
-    if (startY - currentY > 70) {
+    if (startY - currentY > 55) {
+      isVoiceLockedRef.current = true;
       setIsVoiceLocked(true);
     }
   }
@@ -1205,7 +1270,8 @@ function App() {
 
     if (!startY || !currentY) return;
 
-    if (startY - currentY > 70) {
+    if (startY - currentY > 55) {
+      isVoiceLockedRef.current = true;
       setIsVoiceLocked(true);
     }
   }
@@ -1217,9 +1283,8 @@ function App() {
   }
 
   function handleVoiceMouseLeave() {
-    if (isRecording && !isVoiceLocked) {
-      stopVoiceRecording({ send: true });
-    }
+    // На ПК мышь может выйти за пределы кнопки при свайпе вверх.
+    // Поэтому здесь НЕ останавливаем запись: остановка будет по mouseup на всём окне.
   }
 
   function finishLockedVoiceRecording() {
@@ -1773,7 +1838,7 @@ function App() {
               disabled={!selectedChat}
               onMouseDown={startVoiceRecording}
               onMouseMove={handleVoiceMouseMove}
-              onMouseUp={() => !isVoiceLocked && stopVoiceRecording({ send: true })}
+              onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
               onMouseLeave={handleVoiceMouseLeave}
               onTouchStart={startVoiceRecording}
               onTouchMove={handleVoiceTouchMove}
