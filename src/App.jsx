@@ -264,10 +264,16 @@ function App() {
   }, [messages, isAtBottom]);
 
   useEffect(() => {
-    if (!selectedChat?.id) return;
+    if (!selectedChat?.id) {
+      setTypingUser(null);
+      return;
+    }
+
+    refreshTypingStatus(selectedChat.id);
 
     const interval = setInterval(() => {
       loadMessages(selectedChat.id);
+      refreshTypingStatus(selectedChat.id);
     }, 1000);
 
     return () => clearInterval(interval);
@@ -325,6 +331,35 @@ function App() {
     loadMyChats();
   }
 
+
+  async function refreshTypingStatus(chatId) {
+    const currentSession = sessionRef.current || session;
+    const currentSelectedUser = selectedUserRef.current;
+
+    if (!chatId || !currentSession?.user?.id || !currentSelectedUser?.id) {
+      setTypingUser(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("private_chats")
+      .select("typing_user_id, typing_at")
+      .eq("id", chatId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("REFRESH TYPING ERROR:", error);
+      return;
+    }
+
+    const typingIsFresh =
+      data?.typing_user_id &&
+      data.typing_user_id !== currentSession.user.id &&
+      data.typing_at &&
+      Date.now() - new Date(data.typing_at).getTime() < 6000;
+
+    setTypingUser(typingIsFresh ? currentSelectedUser : null);
+  }
 
   async function updateTypingStatus(isTyping) {
     const currentSession = sessionRef.current || session;
@@ -613,6 +648,7 @@ function App() {
     setSearchResults([]);
 
     await loadMessages(chat.id);
+    await refreshTypingStatus(chat.id);
     markChatAsRead(chat.id);
     await loadMyChats();
 
@@ -629,6 +665,7 @@ function App() {
     setIsChatOptionsOpen(false);
 
     await loadMessages(chat.id);
+    await refreshTypingStatus(chat.id);
     markChatAsRead(chat.id);
 
     if (isMobile()) setShowSidebar(false);
@@ -1778,9 +1815,11 @@ function App() {
 
             <div>
               <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
-              <p>
+              <p className={typingUser ? "typing-header-text" : ""}>
                 {selectedUser
-                  ? isUserOnline(selectedUser)
+                  ? typingUser
+                    ? `${typingUser.username || "Пользователь"} что-то колдует`
+                    : isUserOnline(selectedUser)
                     ? "онлайн"
                     : "офлайн"
                   : "найди пользователя слева"}
