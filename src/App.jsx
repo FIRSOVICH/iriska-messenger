@@ -8,22 +8,6 @@ import { isMobile, isUserOnline, getReplyPreview } from "./utils/chatUtils";
 
 const SITE_URL = "https://iriska-messenger.vercel.app";
 
-const CHAT_WALLPAPERS = [
-  { id: "aurora", label: "🌌 Аврора" },
-  { id: "candy", label: "🍬 Ириска" },
-  { id: "ocean", label: "🌊 Океан" },
-  { id: "sunset", label: "🌅 Закат" },
-  { id: "matrix", label: "💚 Матрица" },
-];
-
-const PROFILE_BACKGROUNDS = [
-  { id: "blue", label: "Синий" },
-  { id: "violet", label: "Фиолет" },
-  { id: "pink", label: "Розовый" },
-  { id: "green", label: "Зелёный" },
-  { id: "dark", label: "Тёмный" },
-];
-
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -64,11 +48,8 @@ function App() {
   const [notificationSound, setNotificationSound] = useState(() => localStorage.getItem("iriska_notification_sound") || "qweek");
   const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
   const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
-  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
   const [chatWallpaper, setChatWallpaper] = useState(() => localStorage.getItem("iriska_chat_wallpaper") || "aurora");
-  const [profileBioDraft, setProfileBioDraft] = useState("");
-  const [profileStatusDraft, setProfileStatusDraft] = useState("На работе");
-  const [profileBgDraft, setProfileBgDraft] = useState("blue");
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -112,12 +93,6 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
-
-  useEffect(() => {
-    setProfileBioDraft(profile?.bio || "");
-    setProfileStatusDraft(profile?.status || "На работе");
-    setProfileBgDraft(profile?.profile_bg || "blue");
-  }, [profile?.id, profile?.bio, profile?.status, profile?.profile_bg]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -205,18 +180,16 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      const height = window.visualViewport?.height || window.innerHeight;
+      // Важно: НЕ слушаем visualViewport.resize при открытии клавиатуры iPhone.
+      // Иначе Safari уменьшает высоту приложения и появляется чёрная пустота.
+      const height = window.innerHeight || document.documentElement.clientHeight || 800;
       document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
     }
 
     updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
     window.addEventListener("orientationchange", updateViewportHeight);
 
     return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
       window.removeEventListener("orientationchange", updateViewportHeight);
     };
   }, []);
@@ -633,39 +606,6 @@ function App() {
     }, 2500);
   }
 
-
-  async function saveMyProfileSettings() {
-    const currentSession = sessionRef.current || session;
-    if (!currentSession?.user?.id) return;
-
-    const nextBio = profileBioDraft.trim().slice(0, 160);
-    const nextStatus = profileStatusDraft.trim().slice(0, 40) || "На работе";
-    const nextBg = profileBgDraft || "blue";
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        bio: nextBio,
-        status: nextStatus,
-        profile_bg: nextBg,
-      })
-      .eq("id", currentSession.user.id);
-
-    if (error) {
-      console.error("PROFILE SETTINGS ERROR:", error);
-      alert("Не удалось сохранить профиль. Выполни SQL из файла SUPABASE_SQL_PROFILE_SETTINGS.sql");
-      return;
-    }
-
-    setProfile((current) => ({
-      ...current,
-      bio: nextBio,
-      status: nextStatus,
-      profile_bg: nextBg,
-    }));
-
-    alert("Профиль сохранён");
-  }
 
   async function requestMobileNotifications() {
     if (!("Notification" in window)) {
@@ -2370,7 +2310,7 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme} wallpaper-${chatWallpaper}`} data-theme={theme} data-wallpaper={chatWallpaper}>
+    <div className={`app theme-${theme}`} data-theme={theme} data-wallpaper={chatWallpaper}>
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
@@ -2494,21 +2434,7 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button
-            className="back-btn"
-            onClick={() => {
-              setIsChatOptionsOpen(false);
-              setIsUserProfileOpen(false);
-              setIsChatSearchOpen(false);
-              setEditingMessage(null);
-              setSelectedChat(null);
-              setSelectedUser(null);
-              setMessages([]);
-              setPinnedMessages([]);
-              setTypingUser(null);
-              setShowSidebar(true);
-            }}
-          >
+          <button className="back-btn" onClick={() => { setSelectedChat(null); setSelectedUser(null); setMessages([]); setReplyTo(null); setActionMessage(null); setForwardMessage(null); setActionChat(null); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); setIsChatSearchOpen(false); setShowSidebar(true); }}>
             ←
           </button>
 
@@ -2540,7 +2466,7 @@ function App() {
             <button
               type="button"
               className="chat-options-btn"
-              onClick={() => setIsChatOptionsOpen((value) => !value)}
+              onClick={(event) => { event.stopPropagation(); setIsChatOptionsOpen((value) => !value); }}
               aria-label="Меню чата"
             >
               ⋮
@@ -2954,57 +2880,18 @@ function App() {
 
             <div className="appearance-section">
               <p>Обои чата</p>
-              <div className="appearance-buttons vertical wallpaper-buttons">
-                {CHAT_WALLPAPERS.map((wallpaper) => (
+              <div className="wallpaper-grid">
+                {["aurora", "neon", "ocean", "sunset", "space"].map((item) => (
                   <button
-                    key={wallpaper.id}
+                    key={item}
                     type="button"
-                    className={chatWallpaper === wallpaper.id ? "active" : ""}
-                    onClick={() => setChatWallpaper(wallpaper.id)}
+                    className={`wallpaper-choice wallpaper-${item} ${chatWallpaper === item ? "active" : ""}`}
+                    onClick={() => setChatWallpaper(item)}
                   >
-                    {wallpaper.label}
+                    {item === "aurora" ? "Сияние" : item === "neon" ? "Неон" : item === "ocean" ? "Океан" : item === "sunset" ? "Закат" : "Космос"}
                   </button>
                 ))}
               </div>
-            </div>
-
-            <div className="appearance-section">
-              <p>Мой профиль</p>
-              <input
-                className="appearance-input"
-                value={profileBioDraft}
-                maxLength={160}
-                onChange={(event) => setProfileBioDraft(event.target.value)}
-                placeholder="Описание пользователя"
-              />
-              <div className="appearance-buttons vertical">
-                {["На работе", "Сплю", "Не беспокоить", "В сети"].map((status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    className={profileStatusDraft === status ? "active" : ""}
-                    onClick={() => setProfileStatusDraft(status)}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-              <p className="appearance-subtitle">Фон профиля</p>
-              <div className="appearance-buttons vertical">
-                {PROFILE_BACKGROUNDS.map((bg) => (
-                  <button
-                    key={bg.id}
-                    type="button"
-                    className={profileBgDraft === bg.id ? "active" : ""}
-                    onClick={() => setProfileBgDraft(bg.id)}
-                  >
-                    {bg.label}
-                  </button>
-                ))}
-              </div>
-              <button type="button" className="appearance-save-btn" onClick={saveMyProfileSettings}>
-                💾 Сохранить профиль
-              </button>
             </div>
 
             <div className="appearance-section">
