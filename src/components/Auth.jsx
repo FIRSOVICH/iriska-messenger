@@ -22,6 +22,8 @@ function Auth({
             placeholder="Логин"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            autoCapitalize="none"
+            autoCorrect="off"
           />
         )}
 
@@ -29,6 +31,9 @@ function Auth({
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          autoCapitalize="none"
+          autoCorrect="off"
+          inputMode="email"
         />
 
         <input

@@ -15,5 +15,9 @@ export function getReplyPreview(message) {
     return "📷 Фото";
   }
 
+  if (message.message_type === "audio" || message.audio_url) {
+    return "🎤 Голосовое";
+  }
+
   return message.text || "сообщение";
 }

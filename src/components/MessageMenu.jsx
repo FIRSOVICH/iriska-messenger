@@ -11,6 +11,7 @@ function MessageMenu({
   deleteMessage,
   setForwardMessage,
   forwardToChat,
+  reactToMessage,
 }) {
   return (
     <>
@@ -20,7 +21,21 @@ function MessageMenu({
             <div className="message-action-title">
               {actionMessage.message_type === "image"
                 ? "📷 Фото"
+                : actionMessage.message_type === "audio"
+                ? "🎤 Голосовое"
                 : actionMessage.text || "Сообщение"}
+            </div>
+
+            <div className="reaction-row">
+              {["❤️", "😂", "🔥", "👍"].map((emoji) => (
+                <button
+                  key={emoji}
+                  className="reaction-action"
+                  onClick={() => reactToMessage(actionMessage, emoji)}
+                >
+                  {emoji}
+                </button>
+              ))}
             </div>
 
             <button onClick={replyFromMenu}>↩ Ответить</button>

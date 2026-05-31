@@ -3,6 +3,7 @@ import "./App.css";
 import { supabase } from "./supabase";
 import Auth from "./components/Auth";
 import MessageMenu from "./components/MessageMenu";
+import UserProfile from "./components/UserProfile";
 import { isMobile, isUserOnline, getReplyPreview } from "./utils/chatUtils";
 
 const SITE_URL = "https://iriska-messenger.vercel.app";
@@ -27,6 +28,8 @@ function App() {
   const [actionChat, setActionChat] = useState(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMessagesCount, setNewMessagesCount] = useState(0);
+  const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -43,6 +46,8 @@ function App() {
   const sessionRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const chatLongPressTimerRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const voiceChunksRef = useRef([]);
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
 
@@ -760,9 +765,11 @@ function App() {
     if (!forwardMessage || !chat?.id || !session?.user?.id) return;
 
     const isImage = forwardMessage.message_type === "image" && forwardMessage.image_url;
-    const forwardedText = isImage
-      ? ""
-      : `↪ Переслано\n${forwardMessage.text || "сообщение"}`;
+    const isAudio = forwardMessage.message_type === "audio" && forwardMessage.audio_url;
+    const forwardedText =
+      isImage || isAudio
+        ? ""
+        : `↪ Переслано\n${forwardMessage.text || "сообщение"}`;
 
     const { error } = await supabase
       .from("messages")
@@ -771,7 +778,9 @@ function App() {
         chat_id: chat.id,
         text: forwardedText,
         image_url: isImage ? forwardMessage.image_url : null,
-        message_type: isImage ? "image" : "text",
+        audio_url: isAudio ? forwardMessage.audio_url : null,
+        message_type: isImage ? "image" : isAudio ? "audio" : "text",
+        reactions: {},
         is_deleted: false,
       });
 
@@ -976,6 +985,205 @@ function App() {
     await loadMyChats();
   }
 
+
+  function formatReactionSummary(reactions) {
+    if (!reactions || typeof reactions !== "object") return [];
+
+    const counts = {};
+
+    Object.values(reactions).forEach((emoji) => {
+      if (!emoji) return;
+      counts[emoji] = (counts[emoji] || 0) + 1;
+    });
+
+    return Object.entries(counts).map(([emoji, count]) => ({ emoji, count }));
+  }
+
+  async function reactToMessage(message, emoji) {
+    if (!message?.id || !session?.user?.id) return;
+
+    const currentReactions =
+      message.reactions && typeof message.reactions === "object"
+        ? message.reactions
+        : {};
+
+    const previousEmoji = currentReactions[session.user.id];
+    const nextReactions = { ...currentReactions };
+
+    if (previousEmoji === emoji) {
+      delete nextReactions[session.user.id];
+    } else {
+      nextReactions[session.user.id] = emoji;
+    }
+
+    setMessages((current) =>
+      current.map((msg) =>
+        msg.id === message.id ? { ...msg, reactions: nextReactions } : msg
+      )
+    );
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ reactions: nextReactions })
+      .eq("id", message.id);
+
+    if (error) {
+      console.error("REACTION ERROR:", error);
+      alert("Не удалось поставить реакцию");
+      if (selectedChat?.id) await loadMessages(selectedChat.id);
+      return;
+    }
+
+    closeMessageMenu();
+    await loadMyChats();
+  }
+
+  async function startVoiceRecording() {
+    if (!selectedChat?.id || !session?.user?.id || isRecording) return;
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("Запись голоса не поддерживается этим браузером");
+      return;
+    }
+
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Голосовое не отправлено.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      voiceChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size > 0) {
+          voiceChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+
+        const audioBlob = new Blob(voiceChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+
+        voiceChunksRef.current = [];
+        setIsRecording(false);
+
+        if (audioBlob.size > 0) {
+          await sendVoice(audioBlob);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("VOICE RECORD ERROR:", error);
+      alert("Не удалось включить микрофон");
+      setIsRecording(false);
+    }
+  }
+
+  function stopVoiceRecording() {
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder || recorder.state === "inactive") {
+      setIsRecording(false);
+      return;
+    }
+
+    recorder.stop();
+  }
+
+  async function sendVoice(audioBlob) {
+    if (!audioBlob || !selectedChat?.id || !session?.user?.id) return;
+
+    const tempId = crypto.randomUUID();
+    const previewUrl = URL.createObjectURL(audioBlob);
+
+    const localMessage = {
+      id: tempId,
+      sender_id: session.user.id,
+      chat_id: selectedChat.id,
+      text: "",
+      image_url: null,
+      audio_url: previewUrl,
+      message_type: "audio",
+      reply_to_id: replyTo?.id || null,
+      reply_text: replyTo ? getReplyPreview(replyTo) : null,
+      reply_image_url: replyTo?.image_url || null,
+      reply_sender_id: replyTo?.sender_id || null,
+      reactions: {},
+      created_at: new Date().toISOString(),
+      pending: true,
+      is_deleted: false,
+    };
+
+    setMessages((current) => [...current, localMessage]);
+    setReplyTo(null);
+
+    const fileName = `${session.user.id}-${Date.now()}.webm`;
+    const filePath = `${selectedChat.id}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("voice-messages")
+      .upload(filePath, audioBlob, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: audioBlob.type || "audio/webm",
+      });
+
+    if (uploadError) {
+      console.error("VOICE UPLOAD ERROR:", uploadError);
+      alert("Ошибка загрузки голосового");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    const { data: publicData } = supabase.storage
+      .from("voice-messages")
+      .getPublicUrl(filePath);
+
+    const audioUrl = publicData.publicUrl;
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: selectedChat.id,
+        text: "",
+        image_url: null,
+        audio_url: audioUrl,
+        message_type: "audio",
+        reply_to_id: localMessage.reply_to_id,
+        reply_text: localMessage.reply_text,
+        reply_image_url: localMessage.reply_image_url,
+        reply_sender_id: localMessage.reply_sender_id,
+        reactions: {},
+        is_deleted: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("SEND VOICE MESSAGE ERROR:", error);
+      alert("Ошибка отправки голосового");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((msg) => (msg.id === tempId ? data : msg))
+    );
+
+    markChatAsRead(selectedChat.id);
+    await loadMyChats();
+  }
+
+
   async function uploadAvatar(event) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id) return;
@@ -1056,6 +1264,12 @@ function App() {
       return chat.lastMessage.sender_id === session.user.id
         ? "Вы: 📷 Фото"
         : "📷 Фото";
+    }
+
+    if (chat.lastMessage.message_type === "audio") {
+      return chat.lastMessage.sender_id === session.user.id
+        ? "Вы: 🎤 Голосовое"
+        : "🎤 Голосовое";
     }
 
     if (chat.lastMessage.sender_id === session.user.id) {
@@ -1183,20 +1397,27 @@ function App() {
             ←
           </button>
 
-          <div className="chat-header-avatar">
-            <div className="avatar">{renderAvatar(selectedUser)}</div>
-          </div>
+          <button
+            className="chat-user-button"
+            type="button"
+            onClick={() => selectedUser && setIsUserProfileOpen(true)}
+            disabled={!selectedUser}
+          >
+            <div className="chat-header-avatar">
+              <div className="avatar">{renderAvatar(selectedUser)}</div>
+            </div>
 
-          <div>
-            <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
-            <p>
-              {selectedUser
-                ? isUserOnline(selectedUser)
-                  ? "онлайн"
-                  : "офлайн"
-                : "найди пользователя слева"}
-            </p>
-          </div>
+            <div>
+              <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
+              <p>
+                {selectedUser
+                  ? isUserOnline(selectedUser)
+                    ? "онлайн"
+                    : "офлайн"
+                  : "найди пользователя слева"}
+              </p>
+            </div>
+          </button>
         </header>
 
         <section className="messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
@@ -1227,8 +1448,23 @@ function App() {
 
               {msg.message_type === "image" && msg.image_url ? (
                 <img className="chat-image" src={msg.image_url} alt="Фото" />
+              ) : msg.message_type === "audio" && msg.audio_url ? (
+                <div className="voice-message">
+                  <span>🎤</span>
+                  <audio controls src={msg.audio_url} />
+                </div>
               ) : (
                 msg.text
+              )}
+
+              {formatReactionSummary(msg.reactions).length > 0 && (
+                <div className="message-reactions">
+                  {formatReactionSummary(msg.reactions).map((reaction) => (
+                    <span key={reaction.emoji} className="reaction-badge">
+                      {reaction.emoji} {reaction.count}
+                    </span>
+                  ))}
+                </div>
               )}
             </div>
           ))}
@@ -1265,6 +1501,19 @@ function App() {
               />
             </label>
 
+            <button
+              type="button"
+              className={`voice-btn ${isRecording ? "recording" : ""}`}
+              disabled={!selectedChat}
+              onMouseDown={startVoiceRecording}
+              onMouseUp={stopVoiceRecording}
+              onMouseLeave={() => isRecording && stopVoiceRecording()}
+              onTouchStart={startVoiceRecording}
+              onTouchEnd={stopVoiceRecording}
+            >
+              {isRecording ? "●" : "🎤"}
+            </button>
+
             <input
               value={text}
               disabled={!selectedChat}
@@ -1282,6 +1531,18 @@ function App() {
         </footer>
       </main>
 
+      <UserProfile
+        isOpen={isUserProfileOpen}
+        user={selectedUser}
+        chat={selectedChat}
+        isOnline={isUserOnline(selectedUser)}
+        renderAvatar={renderAvatar}
+        onClose={() => setIsUserProfileOpen(false)}
+        onClearHistory={() => selectedChat && clearChatHistoryForMe(selectedChat)}
+        onDeleteChat={() => selectedChat && deleteChatForMe(selectedChat)}
+        onBlockUser={() => selectedChat && blockUserFromChat(selectedChat)}
+      />
+
       <MessageMenu
         actionMessage={actionMessage}
         forwardMessage={forwardMessage}
@@ -1295,6 +1556,7 @@ function App() {
         deleteMessage={deleteMessage}
         setForwardMessage={setForwardMessage}
         forwardToChat={forwardToChat}
+        reactToMessage={reactToMessage}
       />
 
       {actionChat && (

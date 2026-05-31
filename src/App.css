@@ -886,3 +886,207 @@ input {
     transform: translateY(0);
   }
 }
+
+
+/* === Iriska profile + reactions + voice === */
+
+.chat-user-button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-user-button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.message-reactions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.reaction-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.reaction-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.reaction-action {
+  font-size: 24px !important;
+  padding: 12px !important;
+}
+
+.voice-btn {
+  width: 52px;
+  min-width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.9);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.voice-btn.recording {
+  background: rgba(239, 68, 68, 0.9);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.8);
+  animation: iriskaPulse 1s infinite;
+}
+
+@keyframes iriskaPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.voice-message audio {
+  width: 220px;
+  max-width: 100%;
+}
+
+.user-profile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(10px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.user-profile-card {
+  width: 100%;
+  max-width: 380px;
+  border-radius: 28px;
+  background: #111827;
+  padding: 26px;
+  text-align: center;
+  position: relative;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.55);
+}
+
+.profile-close-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  border: none;
+  background: rgba(30, 41, 59, 0.9);
+  color: white;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.profile-big-avatar {
+  width: 108px;
+  height: 108px;
+  border-radius: 34px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.95);
+  margin: 10px auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 42px;
+}
+
+.profile-big-avatar .avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-profile-card h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.profile-online,
+.profile-offline {
+  margin: 8px 0 20px;
+  font-weight: 700;
+}
+
+.profile-online {
+  color: #22c55e;
+}
+
+.profile-offline {
+  color: #94a3b8;
+}
+
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-actions button {
+  width: 100%;
+  border: none;
+  padding: 15px 16px;
+  border-radius: 18px;
+  background: rgba(30, 41, 59, 0.95);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .voice-btn {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    font-size: 20px;
+  }
+
+  .voice-message {
+    min-width: 180px;
+  }
+
+  .voice-message audio {
+    width: 180px;
+  }
+
+  .user-profile-card {
+    max-width: 100%;
+    border-radius: 26px;
+  }
+}
