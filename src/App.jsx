@@ -22,6 +22,8 @@ function App() {
   const [actionMessage, setActionMessage] = useState(null);
   const [forwardMessage, setForwardMessage] = useState(null);
   const [hiddenMessageIds, setHiddenMessageIds] = useState([]);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [newMessagesCount, setNewMessagesCount] = useState(0);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -29,7 +31,10 @@ function App() {
   const [username, setUsername] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
+  const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const messagesRef = useRef([]);
+  const isAtBottomRef = useRef(true);
   const selectedChatRef = useRef(null);
   const selectedUserRef = useRef(null);
   const sessionRef = useRef(null);
@@ -46,6 +51,15 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    isAtBottomRef.current = isAtBottom;
+  }, [isAtBottom]);
+
   useEffect(() => {
     if (!session?.user?.id) {
       setHiddenMessageIds([]);
@@ -97,6 +111,14 @@ function App() {
               setMessages((current) => {
                 const exists = current.some((msg) => msg.id === payload.new.id);
                 if (exists) return current;
+
+                if (
+                  payload.new.sender_id !== currentSession?.user?.id &&
+                  !isAtBottomRef.current
+                ) {
+                  setNewMessagesCount((count) => count + 1);
+                }
+
                 return [...current, payload.new];
               });
             } else {
@@ -163,8 +185,10 @@ function App() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (isAtBottom) {
+      scrollToBottom("smooth");
+    }
+  }, [messages, isAtBottom]);
 
   useEffect(() => {
     if (!selectedChat?.id) return;
@@ -182,10 +206,29 @@ function App() {
     await loadMyChats();
   }
 
-  function scrollToBottom() {
+  function scrollToBottom(behavior = "smooth") {
     setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({ behavior });
     }, 50);
+  }
+
+  function handleMessagesScroll(event) {
+    const element = event.currentTarget;
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+
+    const nearBottom = distanceFromBottom < 120;
+    setIsAtBottom(nearBottom);
+
+    if (nearBottom) {
+      setNewMessagesCount(0);
+    }
+  }
+
+  function jumpToNewMessages() {
+    setIsAtBottom(true);
+    setNewMessagesCount(0);
+    scrollToBottom("smooth");
   }
 
   function getReadKey(chatId) {
@@ -414,6 +457,8 @@ function App() {
     setSelectedUser(user);
     setMessages([]);
     setReplyTo(null);
+    setIsAtBottom(true);
+    setNewMessagesCount(0);
     setSearch("");
     setSearchResults([]);
 
@@ -429,6 +474,8 @@ function App() {
     setSelectedUser(chat.otherUser);
     setMessages([]);
     setReplyTo(null);
+    setIsAtBottom(true);
+    setNewMessagesCount(0);
 
     await loadMessages(chat.id);
     markChatAsRead(chat.id);
@@ -453,7 +500,19 @@ function App() {
     const hiddenIds = saved ? JSON.parse(saved) : [];
     const visibleMessages = (data || []).filter((msg) => !hiddenIds.includes(msg.id));
 
+    const previousMessages = messagesRef.current || [];
+    const previousLastId = previousMessages[previousMessages.length - 1]?.id;
+    const nextLastId = visibleMessages[visibleMessages.length - 1]?.id;
+    const hasNewMessage =
+      previousMessages.length > 0 &&
+      visibleMessages.length > previousMessages.length &&
+      previousLastId !== nextLastId;
+
     setMessages(visibleMessages);
+
+    if (hasNewMessage && !isAtBottomRef.current) {
+      setNewMessagesCount((count) => count + 1);
+    }
   }
 
 
@@ -944,7 +1003,7 @@ function App() {
           </div>
         </header>
 
-        <section className="messages">
+        <section className="messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
           {!selectedUser && (
             <div className="message bot">Выбери чат или найди пользователя.</div>
           )}
@@ -980,6 +1039,12 @@ function App() {
 
           <div ref={messagesEndRef} />
         </section>
+
+        {!isAtBottom && newMessagesCount > 0 && (
+          <button className="new-messages-btn" onClick={jumpToNewMessages}>
+            ↓ Новые сообщения {newMessagesCount}
+          </button>
+        )}
 
         <footer className="input-area-wrapper">
           {replyTo && (
