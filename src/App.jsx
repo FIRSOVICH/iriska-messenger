@@ -30,6 +30,9 @@ function App() {
   const [newMessagesCount, setNewMessagesCount] = useState(0);
   const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isVoiceLocked, setIsVoiceLocked] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [voicePlayer, setVoicePlayer] = useState({ id: null, playing: false });
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -48,6 +51,10 @@ function App() {
   const chatLongPressTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const voiceChunksRef = useRef([]);
+  const shouldSendVoiceRef = useRef(true);
+  const recordingTouchStartYRef = useRef(null);
+  const recordingTimerRef = useRef(null);
+  const activeAudioRef = useRef(null);
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
 
@@ -1038,7 +1045,9 @@ function App() {
     await loadMyChats();
   }
 
-  async function startVoiceRecording() {
+  async function startVoiceRecording(event) {
+    event?.preventDefault?.();
+
     if (!selectedChat?.id || !session?.user?.id || isRecording) return;
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -1054,7 +1063,10 @@ function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
+
       voiceChunksRef.current = [];
+      shouldSendVoiceRef.current = true;
+      recordingTouchStartYRef.current = event?.touches?.[0]?.clientY || null;
 
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) {
@@ -1064,15 +1076,21 @@ function App() {
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
+        clearInterval(recordingTimerRef.current);
 
         const audioBlob = new Blob(voiceChunksRef.current, {
           type: recorder.mimeType || "audio/webm",
         });
 
-        voiceChunksRef.current = [];
-        setIsRecording(false);
+        const shouldSend = shouldSendVoiceRef.current;
 
-        if (audioBlob.size > 0) {
+        voiceChunksRef.current = [];
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+        setIsVoiceLocked(false);
+        setRecordingSeconds(0);
+
+        if (shouldSend && audioBlob.size > 0) {
           await sendVoice(audioBlob);
         }
       };
@@ -1080,22 +1098,110 @@ function App() {
       mediaRecorderRef.current = recorder;
       recorder.start();
       setIsRecording(true);
+      setIsVoiceLocked(false);
+      setRecordingSeconds(0);
+
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((seconds) => seconds + 1);
+      }, 1000);
     } catch (error) {
       console.error("VOICE RECORD ERROR:", error);
-      alert("Не удалось включить микрофон");
+      clearInterval(recordingTimerRef.current);
       setIsRecording(false);
+      setIsVoiceLocked(false);
+      setRecordingSeconds(0);
+      alert("Не удалось включить микрофон");
     }
   }
 
-  function stopVoiceRecording() {
+  function stopVoiceRecording({ send = true } = {}) {
     const recorder = mediaRecorderRef.current;
+    shouldSendVoiceRef.current = send;
 
     if (!recorder || recorder.state === "inactive") {
+      clearInterval(recordingTimerRef.current);
       setIsRecording(false);
+      setIsVoiceLocked(false);
+      setRecordingSeconds(0);
       return;
     }
 
     recorder.stop();
+  }
+
+  function cancelVoiceRecording() {
+    stopVoiceRecording({ send: false });
+  }
+
+  function handleVoiceTouchMove(event) {
+    if (!isRecording || isVoiceLocked) return;
+
+    const startY = recordingTouchStartYRef.current;
+    const currentY = event?.touches?.[0]?.clientY;
+
+    if (!startY || !currentY) return;
+
+    if (startY - currentY > 70) {
+      setIsVoiceLocked(true);
+    }
+  }
+
+  function handleVoiceTouchEnd() {
+    if (!isRecording) return;
+    if (isVoiceLocked) return;
+    stopVoiceRecording({ send: true });
+  }
+
+  function handleVoiceMouseLeave() {
+    if (isRecording && !isVoiceLocked) {
+      stopVoiceRecording({ send: true });
+    }
+  }
+
+  function finishLockedVoiceRecording() {
+    stopVoiceRecording({ send: true });
+  }
+
+  function formatVoiceTime(totalSeconds) {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
+  }
+
+  function toggleVoicePlayback(message) {
+    if (!message?.audio_url) return;
+
+    if (activeAudioRef.current && voicePlayer.id === message.id && voicePlayer.playing) {
+      activeAudioRef.current.pause();
+      setVoicePlayer({ id: message.id, playing: false });
+      return;
+    }
+
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current = null;
+    }
+
+    const audio = new Audio(message.audio_url);
+    activeAudioRef.current = audio;
+    setVoicePlayer({ id: message.id, playing: true });
+
+    audio.onended = () => {
+      setVoicePlayer({ id: null, playing: false });
+      activeAudioRef.current = null;
+    };
+
+    audio.onerror = () => {
+      setVoicePlayer({ id: null, playing: false });
+      activeAudioRef.current = null;
+    };
+
+    audio.play().catch((error) => {
+      console.error("VOICE PLAY ERROR:", error);
+      setVoicePlayer({ id: null, playing: false });
+      activeAudioRef.current = null;
+    });
   }
 
   async function sendVoice(audioBlob) {
@@ -1449,9 +1555,19 @@ function App() {
               {msg.message_type === "image" && msg.image_url ? (
                 <img className="chat-image" src={msg.image_url} alt="Фото" />
               ) : msg.message_type === "audio" && msg.audio_url ? (
-                <div className="voice-message">
-                  <span>🎤</span>
-                  <audio controls src={msg.audio_url} />
+                <div className="voice-message clean-voice-message">
+                  <span className="voice-icon">🎤</span>
+                  <button
+                    type="button"
+                    className="voice-play-btn"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleVoicePlayback(msg);
+                    }}
+                  >
+                    {voicePlayer.id === msg.id && voicePlayer.playing ? "⏸" : "▶"}
+                  </button>
+                  <span className="voice-label">Голосовое</span>
                 </div>
               ) : (
                 msg.text
@@ -1490,6 +1606,27 @@ function App() {
             </div>
           )}
 
+          {isRecording && (
+            <div className={`voice-recording-panel ${isVoiceLocked ? "locked" : ""}`}>
+              <div className="voice-recording-status">
+                <span className="recording-dot">●</span>
+                <span>{formatVoiceTime(recordingSeconds)}</span>
+                <span>{isVoiceLocked ? "Запись закреплена" : "Потяни вверх, чтобы закрепить"}</span>
+              </div>
+
+              {isVoiceLocked && (
+                <div className="voice-recording-actions">
+                  <button type="button" className="voice-cancel-btn" onClick={cancelVoiceRecording}>
+                    Отмена
+                  </button>
+                  <button type="button" className="voice-send-btn" onClick={finishLockedVoiceRecording}>
+                    Отправить
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="input-area">
             <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
               📎
@@ -1503,13 +1640,14 @@ function App() {
 
             <button
               type="button"
-              className={`voice-btn ${isRecording ? "recording" : ""}`}
+              className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
               disabled={!selectedChat}
               onMouseDown={startVoiceRecording}
-              onMouseUp={stopVoiceRecording}
-              onMouseLeave={() => isRecording && stopVoiceRecording()}
+              onMouseUp={() => !isVoiceLocked && stopVoiceRecording({ send: true })}
+              onMouseLeave={handleVoiceMouseLeave}
               onTouchStart={startVoiceRecording}
-              onTouchEnd={stopVoiceRecording}
+              onTouchMove={handleVoiceTouchMove}
+              onTouchEnd={handleVoiceTouchEnd}
             >
               {isRecording ? "●" : "🎤"}
             </button>
