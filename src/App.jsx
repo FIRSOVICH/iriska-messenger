@@ -48,7 +48,6 @@ function App() {
   const [notificationSound, setNotificationSound] = useState(() => localStorage.getItem("iriska_notification_sound") || "qweek");
   const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
   const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
-  const [chatWallpaper, setChatWallpaper] = useState(() => localStorage.getItem("iriska_chat_wallpaper") || "aurora");
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
 
   const [mode, setMode] = useState("login");
@@ -151,12 +150,10 @@ function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.fontSize = chatFontSize;
     document.documentElement.dataset.bubbleStyle = bubbleStyle;
-    document.documentElement.dataset.wallpaper = chatWallpaper;
     localStorage.setItem("iriska_theme", theme);
     localStorage.setItem("iriska_chat_font_size", chatFontSize);
     localStorage.setItem("iriska_bubble_style", bubbleStyle);
-    localStorage.setItem("iriska_chat_wallpaper", chatWallpaper);
-  }, [theme, chatFontSize, bubbleStyle, chatWallpaper]);
+  }, [theme, chatFontSize, bubbleStyle]);
 
   useEffect(() => {
     localStorage.setItem("iriska_hide_online", hideOnline ? "1" : "0");
@@ -180,16 +177,18 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      // Важно: НЕ слушаем visualViewport.resize при открытии клавиатуры iPhone.
-      // Иначе Safari уменьшает высоту приложения и появляется чёрная пустота.
-      const height = window.innerHeight || document.documentElement.clientHeight || 800;
+      const height = window.visualViewport?.height || window.innerHeight;
       document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
     }
 
     updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
     window.addEventListener("orientationchange", updateViewportHeight);
 
     return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
       window.removeEventListener("orientationchange", updateViewportHeight);
     };
   }, []);
@@ -2310,7 +2309,7 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme}`} data-theme={theme} data-wallpaper={chatWallpaper}>
+    <div className={`app theme-${theme}`} data-theme={theme}>
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
@@ -2434,7 +2433,7 @@ function App() {
 
       <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
-          <button className="back-btn" onClick={() => { setSelectedChat(null); setSelectedUser(null); setMessages([]); setReplyTo(null); setActionMessage(null); setForwardMessage(null); setActionChat(null); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); setIsChatSearchOpen(false); setShowSidebar(true); }}>
+          <button className="back-btn" onClick={() => { setShowSidebar(true); setIsChatOptionsOpen(false); setIsUserProfileOpen(false); }}>
             ←
           </button>
 
@@ -2466,7 +2465,7 @@ function App() {
             <button
               type="button"
               className="chat-options-btn"
-              onClick={(event) => { event.stopPropagation(); setIsChatOptionsOpen((value) => !value); }}
+              onClick={() => setIsChatOptionsOpen((value) => !value)}
               aria-label="Меню чата"
             >
               ⋮
@@ -2474,7 +2473,17 @@ function App() {
           )}
 
           {isChatOptionsOpen && selectedChat && (
-            <div className="chat-options-menu">
+            <div
+              className="chat-options-backdrop"
+              onMouseDown={() => setIsChatOptionsOpen(false)}
+              onTouchStart={() => setIsChatOptionsOpen(false)}
+            >
+              <div
+                className="chat-options-menu"
+                onMouseDown={(event) => event.stopPropagation()}
+                onTouchStart={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
               <button
                 type="button"
                 onClick={() => {
@@ -2545,6 +2554,7 @@ function App() {
               >
                 🚫 Заблокировать пользователя
               </button>
+              </div>
             </div>
           )}
         </header>
@@ -2875,22 +2885,6 @@ function App() {
                 <button type="button" className={chatFontSize === "small" ? "active" : ""} onClick={() => setChatFontSize("small")}>Мелкий</button>
                 <button type="button" className={chatFontSize === "normal" ? "active" : ""} onClick={() => setChatFontSize("normal")}>Обычный</button>
                 <button type="button" className={chatFontSize === "large" ? "active" : ""} onClick={() => setChatFontSize("large")}>Крупный</button>
-              </div>
-            </div>
-
-            <div className="appearance-section">
-              <p>Обои чата</p>
-              <div className="wallpaper-grid">
-                {["aurora", "neon", "ocean", "sunset", "space"].map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`wallpaper-choice wallpaper-${item} ${chatWallpaper === item ? "active" : ""}`}
-                    onClick={() => setChatWallpaper(item)}
-                  >
-                    {item === "aurora" ? "Сияние" : item === "neon" ? "Неон" : item === "ocean" ? "Океан" : item === "sunset" ? "Закат" : "Космос"}
-                  </button>
-                ))}
               </div>
             </div>
 
