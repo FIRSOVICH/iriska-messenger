@@ -24,6 +24,7 @@ function App() {
   const [forwardMessage, setForwardMessage] = useState(null);
   const [hiddenMessageIds, setHiddenMessageIds] = useState([]);
   const [hiddenChatIds, setHiddenChatIds] = useState([]);
+  const [deletedChatIds, setDeletedChatIds] = useState([]);
   const [blockedUserIds, setBlockedUserIds] = useState([]);
   const [actionChat, setActionChat] = useState(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -78,6 +79,7 @@ function App() {
   const isRecordingRef = useRef(false);
   const isVoiceLockedRef = useRef(false);
   const hiddenChatIdsRef = useRef([]);
+  const deletedChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
 
@@ -114,6 +116,10 @@ function App() {
   }, [hiddenChatIds]);
 
   useEffect(() => {
+    deletedChatIdsRef.current = deletedChatIds;
+  }, [deletedChatIds]);
+
+  useEffect(() => {
     blockedUserIdsRef.current = blockedUserIds;
   }, [blockedUserIds]);
 
@@ -121,6 +127,7 @@ function App() {
     if (!session?.user?.id) {
       setHiddenMessageIds([]);
       setHiddenChatIds([]);
+      setDeletedChatIds([]);
       setBlockedUserIds([]);
       return;
     }
@@ -131,12 +138,18 @@ function App() {
     const savedHiddenChats = localStorage.getItem(
       `iriska_hidden_chats_${session.user.id}`
     );
+    const savedDeletedChats = localStorage.getItem(
+      `iriska_deleted_chats_${session.user.id}`
+    );
     const savedBlockedUsers = localStorage.getItem(
       `iriska_blocked_users_${session.user.id}`
     );
 
     setHiddenMessageIds(savedHiddenMessages ? JSON.parse(savedHiddenMessages) : []);
     setHiddenChatIds(savedHiddenChats ? JSON.parse(savedHiddenChats) : []);
+    const parsedDeletedChats = savedDeletedChats ? JSON.parse(savedDeletedChats) : [];
+    deletedChatIdsRef.current = parsedDeletedChats;
+    setDeletedChatIds(parsedDeletedChats);
     const parsedBlockedUsers = savedBlockedUsers ? JSON.parse(savedBlockedUsers) : [];
     setBlockedUserIds(parsedBlockedUsers);
     loadBlockedUsers(parsedBlockedUsers);
@@ -177,11 +190,10 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      // Важно для iPhone/Safari: НЕ уменьшаем высоту приложения до visualViewport.height.
-      // Иначе при открытии клавиатуры чат сжимается, появляется чёрная зона и интерфейс уезжает.
-      const stableHeight = Math.max(520, Math.floor(window.innerHeight || document.documentElement.clientHeight || 0));
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
 
-      document.documentElement.style.setProperty("--iriska-app-height", `${stableHeight}px`);
+      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
 
       const keyboardIsOpen =
         window.visualViewport &&
@@ -855,6 +867,7 @@ function App() {
     );
 
     const visibleChats = chats.filter((chat) => {
+      if (deletedChatIdsRef.current.includes(chat.id)) return false;
       if (hiddenChatIdsRef.current.includes(chat.id)) return false;
       if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
       return true;
@@ -879,12 +892,6 @@ function App() {
       if (updated) {
         setSelectedChat(updated);
         setSelectedUser(updated.otherUser);
-      } else if (hiddenChatIdsRef.current.includes(currentSelected.id)) {
-        setSelectedChat(null);
-        setSelectedUser(null);
-        setMessages([]);
-        setReplyTo(null);
-        if (isMobile()) setShowSidebar(true);
       }
     }
   }
@@ -1046,6 +1053,18 @@ function App() {
     setHiddenChatIds(nextHiddenChatIds);
   }
 
+  function saveDeletedChats(nextDeletedChatIds) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id) return;
+
+    localStorage.setItem(
+      `iriska_deleted_chats_${currentSession.user.id}`,
+      JSON.stringify(nextDeletedChatIds)
+    );
+    deletedChatIdsRef.current = nextDeletedChatIds;
+    setDeletedChatIds(nextDeletedChatIds);
+  }
+
   function saveBlockedUsers(nextBlockedUserIds) {
     const currentSession = sessionRef.current || session;
     if (!currentSession?.user?.id) return;
@@ -1087,19 +1106,30 @@ function App() {
   async function deleteChatForMe(chat) {
     if (!chat?.id) return;
 
-    const ok = confirm("Удалить чат у себя?");
+    const ok = confirm("Удалить чат у себя? Он больше не будет возвращаться после обновления.");
     if (!ok) return;
 
-    const nextHiddenChatIds = Array.from(new Set([...hiddenChatIds, chat.id]));
+    const nextDeletedChatIds = Array.from(
+      new Set([...(deletedChatIdsRef.current || []), chat.id])
+    );
+    saveDeletedChats(nextDeletedChatIds);
+
+    // На всякий случай убираем этот чат и из старого списка скрытых чатов.
+    const nextHiddenChatIds = (hiddenChatIdsRef.current || []).filter((id) => id !== chat.id);
     saveHiddenChats(nextHiddenChatIds);
+
     setMyChats((current) => current.filter((item) => item.id !== chat.id));
 
-    if (selectedChat?.id === chat.id) {
+    if (selectedChatRef.current?.id === chat.id) {
       setSelectedChat(null);
       setSelectedUser(null);
       setMessages([]);
       setReplyTo(null);
-      if (isMobile()) setShowSidebar(true);
+      setPinnedMessages([]);
+      setIsChatSearchOpen(false);
+      setMessageSearch("");
+      setIsChatOptionsOpen(false);
+      setShowSidebar(true);
     }
 
     closeChatMenu();
@@ -1189,8 +1219,8 @@ function App() {
     saveBlockedUsers(nextBlockedUserIds);
 
     if (chat.id) {
-      const nextHiddenChatIds = Array.from(new Set([...hiddenChatIds, chat.id]));
-      saveHiddenChats(nextHiddenChatIds);
+      const nextDeletedChatIds = Array.from(new Set([...(deletedChatIdsRef.current || []), chat.id]));
+      saveDeletedChats(nextDeletedChatIds);
     }
 
     setMyChats((current) => current.filter((item) => item.otherUser?.id !== otherUserId));
