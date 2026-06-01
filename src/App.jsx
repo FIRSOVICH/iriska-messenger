@@ -18,7 +18,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(() => !isMobile());
   const [replyTo, setReplyTo] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
   const [forwardMessage, setForwardMessage] = useState(null);
@@ -50,9 +50,11 @@ function App() {
   const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
   const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
-  const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
-  const drawerTouchStartXRef = useRef(null);
-  const drawerTouchStartYRef = useRef(null);
+  const [isMyProfileOpen, setIsMyProfileOpen] = useState(false);
+  const [chatWallpaper, setChatWallpaper] = useState(() => localStorage.getItem("iriska_chat_wallpaper") || "aurora");
+  const [profileCover, setProfileCover] = useState(() => localStorage.getItem("iriska_profile_cover") || "aurora");
+  const [profileDescription, setProfileDescription] = useState(() => localStorage.getItem("iriska_profile_description") || "");
+  const [profileStatus, setProfileStatus] = useState(() => localStorage.getItem("iriska_profile_status") || "В сети");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -85,6 +87,7 @@ function App() {
   const deletedChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
+  const appTouchStartRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -169,7 +172,11 @@ function App() {
     localStorage.setItem("iriska_theme", theme);
     localStorage.setItem("iriska_chat_font_size", chatFontSize);
     localStorage.setItem("iriska_bubble_style", bubbleStyle);
-  }, [theme, chatFontSize, bubbleStyle]);
+    document.documentElement.dataset.wallpaper = chatWallpaper;
+    document.documentElement.dataset.profileCover = profileCover;
+    localStorage.setItem("iriska_chat_wallpaper", chatWallpaper);
+    localStorage.setItem("iriska_profile_cover", profileCover);
+  }, [theme, chatFontSize, bubbleStyle, chatWallpaper, profileCover]);
 
   useEffect(() => {
     localStorage.setItem("iriska_hide_online", hideOnline ? "1" : "0");
@@ -192,20 +199,24 @@ function App() {
   }, [notificationSound]);
 
   useEffect(() => {
-    function setStableViewportHeight() {
-      // Stable viewport: do not use visualViewport.height here.
-      // iOS changes visualViewport when the keyboard opens, and that was the reason
-      // the whole app jumped into empty/black space.
-      const stableHeight = Math.max(520, Math.floor(window.innerHeight || 0));
-      document.documentElement.style.setProperty("--iriska-app-height", `${stableHeight}px`);
-      document.body.classList.remove("keyboard-open");
+    localStorage.setItem("iriska_profile_description", profileDescription);
+    localStorage.setItem("iriska_profile_status", profileStatus);
+  }, [profileDescription, profileStatus]);
+
+  useEffect(() => {
+    function updateViewportHeight() {
+      // ВАЖНО: не берём visualViewport.height, иначе iPhone при клавиатуре сжимает всё приложение.
+      const roundedHeight = Math.max(420, Math.floor(window.innerHeight));
+      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
     }
 
-    setStableViewportHeight();
-    window.addEventListener("orientationchange", setStableViewportHeight);
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
 
     return () => {
-      window.removeEventListener("orientationchange", setStableViewportHeight);
+      window.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
     };
   }, []);
 
@@ -407,6 +418,41 @@ function App() {
     scrollToBottom("smooth");
   }
 
+
+  function openMainMenu() {
+    setShowSidebar(true);
+  }
+
+  function closeMainMenu() {
+    if (isMobile()) setShowSidebar(false);
+  }
+
+  function handleAppTouchStart(event) {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    appTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleAppTouchMove(event) {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    const start = appTouchStartRef.current;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dy) > 70) return;
+
+    // Открыть меню свайпом от левого края вправо.
+    if (!showSidebar && start.x < 36 && dx > 70) {
+      setShowSidebar(true);
+      return;
+    }
+
+    // Закрыть меню свайпом влево.
+    if (showSidebar && dx < -70) {
+      closeMainMenu();
+    }
+  }
+
   function getReadKey(chatId) {
     return `iriska_read_${session?.user?.id}_${chatId}`;
   }
@@ -530,60 +576,6 @@ function App() {
     }
   }
 
-  function getStoredArray(key) {
-    try {
-      const saved = localStorage.getItem(key);
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      console.warn("LOCAL STORAGE PARSE ERROR:", key, error);
-      return [];
-    }
-  }
-
-  function getDeletedChatsFromStorage(userId) {
-    if (!userId) return [];
-    return getStoredArray(`iriska_deleted_chats_${userId}`);
-  }
-
-  function handleAppTouchStart(event) {
-    if (!isMobile()) return;
-    const touch = event.touches?.[0];
-    if (!touch) return;
-    drawerTouchStartXRef.current = touch.clientX;
-    drawerTouchStartYRef.current = touch.clientY;
-  }
-
-  function handleAppTouchEnd(event) {
-    if (!isMobile()) return;
-    const startX = drawerTouchStartXRef.current;
-    const startY = drawerTouchStartYRef.current;
-    drawerTouchStartXRef.current = null;
-    drawerTouchStartYRef.current = null;
-
-    const touch = event.changedTouches?.[0];
-    if (startX == null || startY == null || !touch) return;
-
-    const dx = touch.clientX - startX;
-    const dy = touch.clientY - startY;
-    if (Math.abs(dy) > 70 || Math.abs(dx) < 55) return;
-
-    // Open menu by swipe from the left edge to the right.
-    if (startX < 38 && dx > 55) {
-      setIsSideMenuOpen(true);
-      return;
-    }
-
-    // Also support the user's "swipe left" habit on the chat-list screen.
-    if (!selectedChatRef.current && dx < -85) {
-      setIsSideMenuOpen(true);
-      return;
-    }
-
-    if (isSideMenuOpen && dx < -55) {
-      setIsSideMenuOpen(false);
-    }
-  }
 
   async function loadBlockedUsers(ids = blockedUserIdsRef.current) {
     if (!ids || ids.length === 0) {
@@ -915,12 +907,8 @@ function App() {
       })
     );
 
-    const storageDeletedChatIds = getDeletedChatsFromStorage(currentSession.user.id);
-    const activeDeletedChatIds = Array.from(new Set([...(deletedChatIdsRef.current || []), ...storageDeletedChatIds]));
-    deletedChatIdsRef.current = activeDeletedChatIds;
-
     const visibleChats = chats.filter((chat) => {
-      if (activeDeletedChatIds.includes(chat.id)) return false;
+      if (deletedChatIdsRef.current.includes(chat.id)) return false;
       if (hiddenChatIdsRef.current.includes(chat.id)) return false;
       if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
       return true;
@@ -1224,7 +1212,7 @@ function App() {
       setReplyTo(null);
     }
 
-    await loadMyChats();
+    // Не перезагружаем список сразу из Supabase, чтобы удалённый чат не мигал и не возвращался на экран.
     closeChatMenu();
     setIsChatOptionsOpen(false);
   }
@@ -1346,7 +1334,9 @@ function App() {
     localStorage.setItem(storageKey, JSON.stringify(nextHiddenIds));
     setHiddenMessageIds(nextHiddenIds);
     setMessages((current) => current.filter((msg) => msg.id !== messageId));
+    setPinnedMessages((current) => current.filter((msg) => msg.id !== messageId));
     closeMessageMenu();
+    loadMyChats();
   }
 
   function startForwardFromMenu() {
@@ -1403,10 +1393,12 @@ function App() {
     const ok = confirm("Удалить сообщение у всех?");
     if (!ok) return;
 
-    const previousMessages = messagesRef.current || [];
+    const currentChatId = selectedChatRef.current?.id;
+    const previousMessages = messagesRef.current;
 
-    // Удаляем с экрана сразу, без ожидания обновления страницы/Realtime.
+    // Сначала убираем с экрана сразу, без ожидания Supabase.
     setMessages((current) => current.filter((msg) => msg.id !== messageId));
+    setPinnedMessages((current) => current.filter((msg) => msg.id !== messageId));
     closeMessageMenu();
 
     if (replyTo?.id === messageId) {
@@ -1427,12 +1419,14 @@ function App() {
 
     if (error) {
       console.error("DELETE MESSAGE ERROR:", error);
-      setMessages(previousMessages);
       alert("Не удалось удалить сообщение");
+      setMessages(previousMessages);
       return;
     }
 
-    await loadMyChats();
+    if (currentChatId) {
+      loadMyChats();
+    }
   }
 
   function startEditMessage(message) {
@@ -2410,23 +2404,11 @@ function App() {
     <div
       className={`app theme-${theme}`}
       data-theme={theme}
+      data-wallpaper={chatWallpaper}
       onTouchStart={handleAppTouchStart}
-      onTouchEnd={handleAppTouchEnd}
+      onTouchMove={handleAppTouchMove}
     >
-      <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
-        <div className="mobile-chat-list-topbar">
-          <button type="button" className="mobile-drawer-button" onClick={() => setIsSideMenuOpen(true)} aria-label="Открыть меню">
-            ☰
-          </button>
-          <div>
-            <h2>Чаты</h2>
-            <p>Ириска</p>
-          </div>
-          <button type="button" className="mobile-compose-button" onClick={() => setSearch("") } aria-label="Новый чат">
-            ✎
-          </button>
-        </div>
-
+      <aside className={`sidebar ${showSidebar ? "show" : "hide"} ${showSidebar ? "drawer-open" : ""}`}>
         <div className="logo">
           <label className="profile-avatar">
             <input type="file" accept="image/*" onChange={uploadAvatar} />
@@ -2443,11 +2425,16 @@ function App() {
           </div>
         </div>
 
+        <button type="button" className="drawer-close-btn" onClick={closeMainMenu}>×</button>
+
         <button className="logout" onClick={logout}>
           Выйти
         </button>
 
         <div className="sidebar-action-grid">
+          <button type="button" className="sidebar-mini-action" onClick={() => setIsMyProfileOpen(true)}>
+            👤 Мой профиль
+          </button>
           <button type="button" className="sidebar-mini-action" onClick={requestMobileNotifications}>
             🔔 Уведомления
           </button>
@@ -2504,7 +2491,7 @@ function App() {
           </div>
         )}
 
-        <div className="block">
+        <div className="block side-chat-list">
           <p className="block-title">Мои чаты</p>
 
           {myChats.length === 0 && (
@@ -2547,7 +2534,7 @@ function App() {
         </div>
       </aside>
 
-      <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
+      <main className={`chat ${!selectedChat ? "chat-home-mode" : ""}`}>
         <header className="chat-header">
           <button
             className="back-btn"
@@ -2556,13 +2543,17 @@ function App() {
               setIsUserProfileOpen(false);
               setActionMessage(null);
               setForwardMessage(null);
-              setSelectedChat(null);
-              setSelectedUser(null);
-              setMessages([]);
-              setShowSidebar(true);
+              if (selectedChat) {
+                setSelectedChat(null);
+                setSelectedUser(null);
+                setMessages([]);
+                setShowSidebar(false);
+              } else {
+                openMainMenu();
+              }
             }}
           >
-            ←
+            {selectedChat ? "←" : "☰"}
           </button>
 
           <button
@@ -2576,7 +2567,7 @@ function App() {
             </div>
 
             <div>
-              <h2>{selectedUser ? selectedUser.username : "Выбери чат"}</h2>
+              <h2>{selectedUser ? selectedUser.username : "Чаты"}</h2>
               <p className={typingUser ? "typing-header-text" : ""}>
                 {selectedUser
                   ? typingUser
@@ -2584,7 +2575,7 @@ function App() {
                     : isUserOnline(selectedUser)
                     ? "онлайн"
                     : "офлайн"
-                  : "найди пользователя слева"}
+                  : "Ириска"}
               </p>
             </div>
           </button>
@@ -2602,7 +2593,66 @@ function App() {
 
         </header>
 
-        {pinnedMessages.length > 0 && (
+        {!selectedChat && (
+          <section className="mobile-home-chats">
+            <input
+              className="search-input mobile-home-search"
+              placeholder="Найти пользователя..."
+              value={search}
+              onChange={(e) => searchUsers(e.target.value)}
+            />
+
+            {searchResults.length > 0 && (
+              <div className="mobile-home-search-results">
+                {searchResults.map((user) => (
+                  <button
+                    type="button"
+                    className="chat-item mobile-chat-card"
+                    key={user.id}
+                    onClick={() => openChatWithUser(user)}
+                  >
+                    <span className="avatar">{renderAvatar(user)}</span>
+                    <span className="chat-info">
+                      <h3>{user.username}</h3>
+                      <p>{isUserOnline(user) ? "онлайн" : "офлайн"}</p>
+                    </span>
+                    <span className={isUserOnline(user) ? "online-dot" : "offline-dot"} />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <p className="block-title mobile-home-title">Мои чаты</p>
+
+            <div className="mobile-home-chat-list">
+              {myChats.length === 0 && (
+                <p className="empty">Пока нет чатов. Найди пользователя выше.</p>
+              )}
+
+              {myChats.map((chat) => (
+                <button
+                  type="button"
+                  className="chat-item mobile-chat-card"
+                  key={chat.id}
+                  onClick={() => openExistingChat(chat)}
+                  onContextMenu={(event) => handleChatContextMenu(event, chat)}
+                >
+                  <span className="avatar">{renderAvatar(chat.otherUser)}</span>
+                  <span className="chat-info">
+                    <h3>{chat.otherUser?.username || "Пользователь"}</h3>
+                    <p>{renderLastMessage(chat)}</p>
+                  </span>
+                  <span className="chat-meta">
+                    <span className={isUserOnline(chat.otherUser) ? "online-dot" : "offline-dot"} />
+                    {chat.unreadCount > 0 && <span className="unread-badge">{chat.unreadCount}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {pinnedMessages.length > 0 && selectedChat && (
           <div className="pinned-messages-panel">
             <div className="pinned-title">📌 Закреплено</div>
             {pinnedMessages.slice(0, 3).map((message) => (
@@ -2960,32 +3010,6 @@ function App() {
         </div>
       )}
 
-
-      {isSideMenuOpen && (
-        <div className="mobile-side-menu-backdrop" onClick={() => setIsSideMenuOpen(false)}>
-          <aside className="mobile-side-menu" onClick={(event) => event.stopPropagation()}>
-            <div className="mobile-side-menu-head">
-              <label className="profile-avatar">
-                <input type="file" accept="image/*" onChange={uploadAvatar} />
-                {profile?.avatar_url ? <img src={profile.avatar_url} alt="avatar" /> : <span>🍬</span>}
-              </label>
-              <div>
-                <h2>Ириска</h2>
-                <p>{profile?.username || session.user.email}</p>
-              </div>
-              <button type="button" onClick={() => setIsSideMenuOpen(false)}>×</button>
-            </div>
-
-            <button className="mobile-side-menu-action" onClick={() => { requestMobileNotifications(); setIsSideMenuOpen(false); }}>🔔 Уведомления</button>
-            <button className="mobile-side-menu-action" onClick={() => { toggleTheme(); setIsSideMenuOpen(false); }}>{theme === "dark" ? "☀️ Светлая тема" : "🌙 Тёмная тема"}</button>
-            <button className="mobile-side-menu-action" onClick={() => { setHideOnline((value) => !value); setIsSideMenuOpen(false); }}>{hideOnline ? "🫥 Онлайн скрыт" : "👁️ Скрыть онлайн"}</button>
-            <button className="mobile-side-menu-action" onClick={() => { setIsAppearanceOpen(true); setIsSideMenuOpen(false); }}>🎨 Оформление / фон</button>
-            <button className="mobile-side-menu-action" onClick={() => { loadBlockedUsers(); setIsBlockedUsersOpen(true); setIsSideMenuOpen(false); }}>🚫 Заблокированные</button>
-            <button className="mobile-side-menu-action" onClick={() => { restoreHiddenChats(); setIsSideMenuOpen(false); }}>↩️ Вернуть скрытые чаты</button>
-            <button className="mobile-side-menu-action danger-action" onClick={logout}>Выйти</button>
-          </aside>
-        </div>
-      )}
       <UserProfile
         isOpen={isUserProfileOpen}
         user={selectedUser}
@@ -3033,6 +3057,21 @@ function App() {
             </div>
 
             <div className="appearance-section">
+              <p>Обои чата</p>
+              <div className="wallpaper-grid">
+                {["aurora", "cosmos", "neon", "sunset", "ocean", "rain", "forest", "cyber", "ice", "violet", "fire", "minimal"].map((item) => (
+                  <button
+                    type="button"
+                    key={item}
+                    className={`wallpaper-choice wallpaper-${item} ${chatWallpaper === item ? "active" : ""}`}
+                    onClick={() => setChatWallpaper(item)}
+                    aria-label={item}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="appearance-section">
               <p>Пузырьки</p>
               <div className="appearance-buttons">
                 <button type="button" className={bubbleStyle === "round" ? "active" : ""} onClick={() => setBubbleStyle("round")}>Круглые</button>
@@ -3057,6 +3096,73 @@ function App() {
                 <button type="button" className={notificationSound === "oi" ? "active" : ""} onClick={() => { setNotificationSound("oi"); playNotificationSound("oi"); }}>ой ой</button>
                 <button type="button" className={notificationSound === "glass" ? "active" : ""} onClick={() => { setNotificationSound("glass"); playNotificationSound("glass"); }}>бьющееся стекло</button>
                 <button type="button" className={notificationSound === "ding" ? "active" : ""} onClick={() => { setNotificationSound("ding"); playNotificationSound("ding"); }}>цзынь-цзынь</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMyProfileOpen && (
+        <div className="message-menu-backdrop" onClick={() => setIsMyProfileOpen(false)}>
+          <div className="my-profile-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="blocked-users-header">
+              <h3>👤 Мой профиль</h3>
+              <button type="button" onClick={() => setIsMyProfileOpen(false)}>×</button>
+            </div>
+
+            <div className={`my-profile-cover wallpaper-${profileCover}`}>
+              <label className="profile-big-avatar editable-avatar">
+                <input type="file" accept="image/*" onChange={uploadAvatar} />
+                {renderAvatar(profile)}
+              </label>
+            </div>
+
+            <div className="appearance-section">
+              <p>Описание</p>
+              <textarea
+                className="profile-textarea"
+                value={profileDescription}
+                onChange={(event) => setProfileDescription(event.target.value)}
+                placeholder="Например: на смене, делаю Ириску 🍬"
+                maxLength={120}
+              />
+            </div>
+
+            <div className="appearance-section">
+              <p>Статус</p>
+              <div className="appearance-buttons vertical">
+                {["В сети", "На работе", "Сплю", "Не беспокоить", "Пью кофе", "На смене", "Играю", "В дороге"].map((status) => (
+                  <button
+                    type="button"
+                    key={status}
+                    className={profileStatus === status ? "active" : ""}
+                    onClick={() => setProfileStatus(status)}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Дата регистрации</p>
+              <div className="profile-date-box">
+                {session?.user?.created_at ? new Date(session.user.created_at).toLocaleDateString("ru-RU") : "—"}
+              </div>
+            </div>
+
+            <div className="appearance-section">
+              <p>Фон профиля</p>
+              <div className="wallpaper-grid">
+                {["aurora", "cosmos", "neon", "sunset", "ocean", "rain", "forest", "cyber", "ice", "violet", "fire", "minimal"].map((item) => (
+                  <button
+                    type="button"
+                    key={item}
+                    className={`wallpaper-choice wallpaper-${item} ${profileCover === item ? "active" : ""}`}
+                    onClick={() => setProfileCover(item)}
+                    aria-label={item}
+                  />
+                ))}
               </div>
             </div>
           </div>
