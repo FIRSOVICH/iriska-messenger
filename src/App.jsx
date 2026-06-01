@@ -80,9 +80,6 @@ function App() {
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
-  const drawerTouchStartXRef = useRef(null);
-  const drawerTouchCurrentXRef = useRef(null);
-
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -95,6 +92,12 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    if (!selectedChat?.id && isMobile()) {
+      setShowSidebar(true);
+    }
+  }, [selectedChat?.id]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -179,12 +182,12 @@ function App() {
   }, [notificationSound]);
 
   useEffect(() => {
-    function updateViewportHeight() {
-      const viewportHeight = window.visualViewport?.height || window.innerHeight;
-      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
+    function setStableAppHeight() {
+      const height = Math.max(560, Math.floor(window.innerHeight || document.documentElement.clientHeight || 720));
+      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
+    }
 
-      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
-
+    function detectKeyboard() {
       const keyboardIsOpen =
         window.visualViewport &&
         window.innerHeight - window.visualViewport.height > 120;
@@ -192,15 +195,19 @@ function App() {
       document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
     }
 
-    updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
-    window.addEventListener("orientationchange", updateViewportHeight);
+    setStableAppHeight();
+    detectKeyboard();
+
+    window.addEventListener("resize", setStableAppHeight);
+    window.addEventListener("orientationchange", () => setTimeout(setStableAppHeight, 250));
+    window.visualViewport?.addEventListener("resize", detectKeyboard);
+    window.visualViewport?.addEventListener("scroll", detectKeyboard);
 
     return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
-      window.removeEventListener("orientationchange", updateViewportHeight);
+      window.removeEventListener("resize", setStableAppHeight);
+      window.removeEventListener("orientationchange", setStableAppHeight);
+      window.visualViewport?.removeEventListener("resize", detectKeyboard);
+      window.visualViewport?.removeEventListener("scroll", detectKeyboard);
     };
   }, []);
 
@@ -717,49 +724,6 @@ function App() {
       .eq("id", currentSession.user.id);
   }
 
-  async function resetPasswordByEmail() {
-    const value = email.trim();
-
-    if (!value) {
-      setAuthMessage("Введи email, к которому привязан аккаунт");
-      return;
-    }
-
-    const { error } = await supabase.auth.resetPasswordForEmail(value, {
-      redirectTo: SITE_URL,
-    });
-
-    if (error) {
-      setAuthMessage(error.message);
-      return;
-    }
-
-    setAuthMessage("Ссылка для смены пароля отправлена на почту.");
-  }
-
-  async function changeMyPassword() {
-    const nextPassword = window.prompt("Введите новый пароль минимум 6 символов:");
-
-    if (!nextPassword) return;
-
-    if (nextPassword.length < 6) {
-      alert("Пароль должен быть минимум 6 символов");
-      return;
-    }
-
-    const { error } = await supabase.auth.updateUser({
-      password: nextPassword,
-    });
-
-    if (error) {
-      console.error("CHANGE PASSWORD ERROR:", error);
-      alert(error.message || "Не удалось изменить пароль");
-      return;
-    }
-
-    alert("Пароль изменён");
-  }
-
   async function register() {
     if (!username.trim() || !email.trim() || !password.trim()) {
       setAuthMessage("Заполни логин, email и пароль");
@@ -900,7 +864,6 @@ function App() {
     );
 
     const visibleChats = chats.filter((chat) => {
-      if (hiddenChatIdsRef.current.includes(chat.id)) return false;
       if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
       return true;
     });
@@ -2344,49 +2307,6 @@ function App() {
     return chat.lastMessage.text || "сообщение";
   }
 
-  function handleAppTouchStart(event) {
-    if (!isMobile()) return;
-    const touch = event.touches?.[0];
-    if (!touch) return;
-    drawerTouchStartXRef.current = touch.clientX;
-    drawerTouchCurrentXRef.current = touch.clientX;
-  }
-
-  function handleAppTouchMove(event) {
-    if (!isMobile()) return;
-    const touch = event.touches?.[0];
-    if (!touch) return;
-    drawerTouchCurrentXRef.current = touch.clientX;
-  }
-
-  function handleAppTouchEnd() {
-    if (!isMobile()) return;
-    const startX = drawerTouchStartXRef.current;
-    const currentX = drawerTouchCurrentXRef.current;
-    drawerTouchStartXRef.current = null;
-    drawerTouchCurrentXRef.current = null;
-
-    if (startX == null || currentX == null) return;
-
-    const distance = currentX - startX;
-
-    if (startX <= 34 && distance > 70) {
-      setShowSidebar(true);
-      return;
-    }
-
-    if (showSidebar && distance < -70) {
-      setShowSidebar(false);
-    }
-  }
-
-  function closeDrawer() {
-    if (isMobile()) {
-      setShowSidebar(false);
-    }
-  }
-
-
   if (!session) {
     return (
       <Auth
@@ -2401,25 +2321,12 @@ function App() {
         authMessage={authMessage}
         register={register}
         login={login}
-        resetPasswordByEmail={resetPasswordByEmail}
       />
     );
   }
 
   return (
-    <div
-      className={`app theme-${theme} ${showSidebar ? "drawer-open" : ""}`}
-      data-theme={theme}
-      onTouchStart={handleAppTouchStart}
-      onTouchMove={handleAppTouchMove}
-      onTouchEnd={handleAppTouchEnd}
-    >
-      <button
-        type="button"
-        className={`mobile-drawer-backdrop ${showSidebar ? "show" : ""}`}
-        onClick={closeDrawer}
-        aria-label="Закрыть меню"
-      />
+    <div className={`app theme-${theme}`} data-theme={theme}>
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
@@ -2444,9 +2351,6 @@ function App() {
         <div className="sidebar-action-grid">
           <button type="button" className="sidebar-mini-action" onClick={requestMobileNotifications}>
             🔔 Уведомления
-          </button>
-          <button type="button" className="sidebar-mini-action" onClick={changeMyPassword}>
-            🔐 Изменить пароль
           </button>
           <button type="button" className="sidebar-mini-action" onClick={toggleTheme}>
             {theme === "dark" ? "☀️ Светлая" : "🌙 Тёмная"}
@@ -2553,6 +2457,9 @@ function App() {
               setIsUserProfileOpen(false);
               setActionMessage(null);
               setForwardMessage(null);
+              setSelectedChat(null);
+              setSelectedUser(null);
+              setMessages([]);
               setShowSidebar(true);
             }}
           >
