@@ -50,6 +50,9 @@ function App() {
   const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem("iriska_chat_font_size") || "normal");
   const [bubbleStyle, setBubbleStyle] = useState(() => localStorage.getItem("iriska_bubble_style") || "round");
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
+  const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
+  const drawerTouchStartXRef = useRef(null);
+  const drawerTouchStartYRef = useRef(null);
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -189,28 +192,20 @@ function App() {
   }, [notificationSound]);
 
   useEffect(() => {
-    function updateViewportHeight() {
-      const viewportHeight = window.visualViewport?.height || window.innerHeight;
-      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
-
-      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
-
-      const keyboardIsOpen =
-        window.visualViewport &&
-        window.innerHeight - window.visualViewport.height > 120;
-
-      document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
+    function setStableViewportHeight() {
+      // Stable viewport: do not use visualViewport.height here.
+      // iOS changes visualViewport when the keyboard opens, and that was the reason
+      // the whole app jumped into empty/black space.
+      const stableHeight = Math.max(520, Math.floor(window.innerHeight || 0));
+      document.documentElement.style.setProperty("--iriska-app-height", `${stableHeight}px`);
+      document.body.classList.remove("keyboard-open");
     }
 
-    updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
-    window.addEventListener("orientationchange", updateViewportHeight);
+    setStableViewportHeight();
+    window.addEventListener("orientationchange", setStableViewportHeight);
 
     return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
-      window.removeEventListener("orientationchange", updateViewportHeight);
+      window.removeEventListener("orientationchange", setStableViewportHeight);
     };
   }, []);
 
@@ -535,6 +530,60 @@ function App() {
     }
   }
 
+  function getStoredArray(key) {
+    try {
+      const saved = localStorage.getItem(key);
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.warn("LOCAL STORAGE PARSE ERROR:", key, error);
+      return [];
+    }
+  }
+
+  function getDeletedChatsFromStorage(userId) {
+    if (!userId) return [];
+    return getStoredArray(`iriska_deleted_chats_${userId}`);
+  }
+
+  function handleAppTouchStart(event) {
+    if (!isMobile()) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    drawerTouchStartXRef.current = touch.clientX;
+    drawerTouchStartYRef.current = touch.clientY;
+  }
+
+  function handleAppTouchEnd(event) {
+    if (!isMobile()) return;
+    const startX = drawerTouchStartXRef.current;
+    const startY = drawerTouchStartYRef.current;
+    drawerTouchStartXRef.current = null;
+    drawerTouchStartYRef.current = null;
+
+    const touch = event.changedTouches?.[0];
+    if (startX == null || startY == null || !touch) return;
+
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    if (Math.abs(dy) > 70 || Math.abs(dx) < 55) return;
+
+    // Open menu by swipe from the left edge to the right.
+    if (startX < 38 && dx > 55) {
+      setIsSideMenuOpen(true);
+      return;
+    }
+
+    // Also support the user's "swipe left" habit on the chat-list screen.
+    if (!selectedChatRef.current && dx < -85) {
+      setIsSideMenuOpen(true);
+      return;
+    }
+
+    if (isSideMenuOpen && dx < -55) {
+      setIsSideMenuOpen(false);
+    }
+  }
 
   async function loadBlockedUsers(ids = blockedUserIdsRef.current) {
     if (!ids || ids.length === 0) {
@@ -866,8 +915,12 @@ function App() {
       })
     );
 
+    const storageDeletedChatIds = getDeletedChatsFromStorage(currentSession.user.id);
+    const activeDeletedChatIds = Array.from(new Set([...(deletedChatIdsRef.current || []), ...storageDeletedChatIds]));
+    deletedChatIdsRef.current = activeDeletedChatIds;
+
     const visibleChats = chats.filter((chat) => {
-      if (deletedChatIdsRef.current.includes(chat.id)) return false;
+      if (activeDeletedChatIds.includes(chat.id)) return false;
       if (hiddenChatIdsRef.current.includes(chat.id)) return false;
       if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
       return true;
@@ -1350,6 +1403,16 @@ function App() {
     const ok = confirm("Удалить сообщение у всех?");
     if (!ok) return;
 
+    const previousMessages = messagesRef.current || [];
+
+    // Удаляем с экрана сразу, без ожидания обновления страницы/Realtime.
+    setMessages((current) => current.filter((msg) => msg.id !== messageId));
+    closeMessageMenu();
+
+    if (replyTo?.id === messageId) {
+      setReplyTo(null);
+    }
+
     const { error } = await supabase
       .from("messages")
       .update({
@@ -1364,21 +1427,11 @@ function App() {
 
     if (error) {
       console.error("DELETE MESSAGE ERROR:", error);
+      setMessages(previousMessages);
       alert("Не удалось удалить сообщение");
       return;
     }
 
-    setMessages((current) => current.filter((msg) => msg.id !== messageId));
-
-    if (replyTo?.id === messageId) {
-      setReplyTo(null);
-    }
-
-    if (selectedChat?.id) {
-      await loadMessages(selectedChat.id);
-    }
-
-    closeMessageMenu();
     await loadMyChats();
   }
 
@@ -2354,8 +2407,26 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme}`} data-theme={theme}>
+    <div
+      className={`app theme-${theme}`}
+      data-theme={theme}
+      onTouchStart={handleAppTouchStart}
+      onTouchEnd={handleAppTouchEnd}
+    >
       <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
+        <div className="mobile-chat-list-topbar">
+          <button type="button" className="mobile-drawer-button" onClick={() => setIsSideMenuOpen(true)} aria-label="Открыть меню">
+            ☰
+          </button>
+          <div>
+            <h2>Чаты</h2>
+            <p>Ириска</p>
+          </div>
+          <button type="button" className="mobile-compose-button" onClick={() => setSearch("") } aria-label="Новый чат">
+            ✎
+          </button>
+        </div>
+
         <div className="logo">
           <label className="profile-avatar">
             <input type="file" accept="image/*" onChange={uploadAvatar} />
@@ -2889,6 +2960,32 @@ function App() {
         </div>
       )}
 
+
+      {isSideMenuOpen && (
+        <div className="mobile-side-menu-backdrop" onClick={() => setIsSideMenuOpen(false)}>
+          <aside className="mobile-side-menu" onClick={(event) => event.stopPropagation()}>
+            <div className="mobile-side-menu-head">
+              <label className="profile-avatar">
+                <input type="file" accept="image/*" onChange={uploadAvatar} />
+                {profile?.avatar_url ? <img src={profile.avatar_url} alt="avatar" /> : <span>🍬</span>}
+              </label>
+              <div>
+                <h2>Ириска</h2>
+                <p>{profile?.username || session.user.email}</p>
+              </div>
+              <button type="button" onClick={() => setIsSideMenuOpen(false)}>×</button>
+            </div>
+
+            <button className="mobile-side-menu-action" onClick={() => { requestMobileNotifications(); setIsSideMenuOpen(false); }}>🔔 Уведомления</button>
+            <button className="mobile-side-menu-action" onClick={() => { toggleTheme(); setIsSideMenuOpen(false); }}>{theme === "dark" ? "☀️ Светлая тема" : "🌙 Тёмная тема"}</button>
+            <button className="mobile-side-menu-action" onClick={() => { setHideOnline((value) => !value); setIsSideMenuOpen(false); }}>{hideOnline ? "🫥 Онлайн скрыт" : "👁️ Скрыть онлайн"}</button>
+            <button className="mobile-side-menu-action" onClick={() => { setIsAppearanceOpen(true); setIsSideMenuOpen(false); }}>🎨 Оформление / фон</button>
+            <button className="mobile-side-menu-action" onClick={() => { loadBlockedUsers(); setIsBlockedUsersOpen(true); setIsSideMenuOpen(false); }}>🚫 Заблокированные</button>
+            <button className="mobile-side-menu-action" onClick={() => { restoreHiddenChats(); setIsSideMenuOpen(false); }}>↩️ Вернуть скрытые чаты</button>
+            <button className="mobile-side-menu-action danger-action" onClick={logout}>Выйти</button>
+          </aside>
+        </div>
+      )}
       <UserProfile
         isOpen={isUserProfileOpen}
         user={selectedUser}
