@@ -55,6 +55,7 @@ function App() {
   const [profileCover, setProfileCover] = useState(() => localStorage.getItem("iriska_profile_cover") || "aurora");
   const [profileDescription, setProfileDescription] = useState(() => localStorage.getItem("iriska_profile_description") || "");
   const [profileStatus, setProfileStatus] = useState(() => localStorage.getItem("iriska_profile_status") || "В сети");
+  const [profileNickname, setProfileNickname] = useState(() => localStorage.getItem("iriska_profile_nickname") || "");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -199,9 +200,26 @@ function App() {
   }, [notificationSound]);
 
   useEffect(() => {
+    if (!profile) return;
+
+    setProfileNickname(profile.username || "");
+    setProfileDescription(profile.description || localStorage.getItem("iriska_profile_description") || "");
+    setProfileStatus(profile.status || localStorage.getItem("iriska_profile_status") || "В сети");
+
+    if (profile.profile_cover) {
+      setProfileCover(profile.profile_cover);
+    }
+
+    if (profile.chat_wallpaper) {
+      setChatWallpaper(profile.chat_wallpaper);
+    }
+  }, [profile?.id]);
+
+  useEffect(() => {
+    localStorage.setItem("iriska_profile_nickname", profileNickname);
     localStorage.setItem("iriska_profile_description", profileDescription);
     localStorage.setItem("iriska_profile_status", profileStatus);
-  }, [profileDescription, profileStatus]);
+  }, [profileNickname, profileDescription, profileStatus]);
 
   useEffect(() => {
     function updateViewportHeight() {
@@ -2280,6 +2298,67 @@ function App() {
   }
 
 
+  async function saveMyProfileSettings() {
+    const currentSession = sessionRef.current || session;
+
+    if (!currentSession?.user?.id) return;
+
+    const nextNickname = profileNickname.trim();
+
+    if (!nextNickname) {
+      alert("Никнейм не может быть пустым");
+      return;
+    }
+
+    const nextProfile = {
+      username: nextNickname,
+      description: profileDescription.trim(),
+      status: profileStatus,
+      profile_cover: profileCover,
+      chat_wallpaper: chatWallpaper,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(nextProfile)
+      .eq("id", currentSession.user.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("SAVE PROFILE ERROR:", error);
+      alert("Не удалось сохранить профиль. Проверь SQL-поля description/status/profile_cover/chat_wallpaper.");
+      return;
+    }
+
+    setProfile(data);
+    setSearchResults((current) =>
+      current.map((user) => (user.id === data.id ? data : user))
+    );
+
+    setMyChats((current) =>
+      current.map((chat) =>
+        chat.otherUser?.id === data.id
+          ? { ...chat, otherUser: data }
+          : chat
+      )
+    );
+
+    if (selectedUserRef.current?.id === data.id) {
+      setSelectedUser(data);
+    }
+
+    localStorage.setItem("iriska_profile_nickname", data.username || nextNickname);
+    localStorage.setItem("iriska_profile_description", data.description || "");
+    localStorage.setItem("iriska_profile_status", data.status || "В сети");
+    localStorage.setItem("iriska_profile_cover", data.profile_cover || profileCover);
+    localStorage.setItem("iriska_chat_wallpaper", data.chat_wallpaper || chatWallpaper);
+
+    await loadMyChats();
+    alert("Профиль сохранён");
+  }
+
   async function uploadAvatar(event) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id) return;
@@ -3127,6 +3206,17 @@ function App() {
             </div>
 
             <div className="appearance-section">
+              <p>Никнейм</p>
+              <input
+                className="profile-input"
+                value={profileNickname}
+                onChange={(event) => setProfileNickname(event.target.value)}
+                placeholder="Например: FIRSOVICH"
+                maxLength={32}
+              />
+            </div>
+
+            <div className="appearance-section">
               <p>Описание</p>
               <textarea
                 className="profile-textarea"
@@ -3174,6 +3264,10 @@ function App() {
                 ))}
               </div>
             </div>
+
+            <button type="button" className="profile-save-btn" onClick={saveMyProfileSettings}>
+              💾 Сохранить профиль
+            </button>
           </div>
         </div>
       )}

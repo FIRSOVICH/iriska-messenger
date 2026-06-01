@@ -4563,3 +4563,42 @@ html[data-theme="light"] body,
     min-width: 42px !important;
   }
 }
+
+/* IRISKA nickname profile input */
+.profile-input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(2, 6, 23, 0.72);
+  color: white;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.profile-input::placeholder {
+  color: rgba(203, 213, 225, 0.55);
+}
+
+.profile-save-btn {
+  width: 100%;
+  border: 0;
+  margin-top: 14px;
+  padding: 13px 16px;
+  border-radius: 18px;
+  color: white;
+  font-size: 15px;
+  font-weight: 900;
+  cursor: pointer;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+}
+
+.profile-save-btn:active {
+  transform: scale(0.985);
+}
+
+.app.theme-light .profile-input {
+  background: rgba(241, 245, 249, 0.96) !important;
+  color: #0f172a !important;
+}
