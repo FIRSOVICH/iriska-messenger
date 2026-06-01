@@ -10,6 +10,7 @@ function Auth({
   authMessage,
   register,
   login,
+  resetPasswordByEmail,
 }) {
   return (
     <div className="auth-page">
@@ -22,18 +23,18 @@ function Auth({
             placeholder="Логин"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            autoCapitalize="none"
-            autoCorrect="off"
+            autoComplete="username"
           />
         )}
 
         <input
           placeholder="Email"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => setEmail(e.target.value.trim())}
+          inputMode="email"
           autoCapitalize="none"
           autoCorrect="off"
-          inputMode="email"
+          autoComplete="email"
         />
 
         <input
@@ -41,11 +42,18 @@ function Auth({
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
         />
 
         <button onClick={mode === "login" ? login : register}>
           {mode === "login" ? "Войти" : "Создать аккаунт"}
         </button>
+
+        {mode === "login" && (
+          <button type="button" className="auth-secondary-btn" onClick={resetPasswordByEmail}>
+            Забыли пароль?
+          </button>
+        )}
 
         <span onClick={() => setMode(mode === "login" ? "register" : "login")}>
           {mode === "login"

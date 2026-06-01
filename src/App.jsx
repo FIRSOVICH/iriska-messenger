@@ -80,6 +80,8 @@ function App() {
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
+  const swipeStartXRef = useRef(null);
+  const swipeStartYRef = useRef(null);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -177,29 +179,39 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      const viewportHeight = window.visualViewport?.height || window.innerHeight;
-      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
+      const viewport = window.visualViewport;
+      const height = Math.floor(viewport?.height || window.innerHeight || document.documentElement.clientHeight);
+      const offsetTop = Math.floor(viewport?.offsetTop || 0);
+      const keyboardIsOpen = Boolean(viewport && window.innerHeight - viewport.height > 120);
 
-      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
+      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
+      document.documentElement.style.setProperty("--iriska-viewport-offset-top", `${offsetTop}px`);
+      document.documentElement.style.setProperty("--iriska-safe-bottom", "env(safe-area-inset-bottom)");
 
-      const keyboardIsOpen =
-        window.visualViewport &&
-        window.innerHeight - window.visualViewport.height > 120;
-
-      document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
+      document.body.classList.toggle("keyboard-open", keyboardIsOpen);
+      document.body.classList.toggle("mobile-drawer-open", isMobile() && showSidebar && Boolean(selectedChatRef.current));
     }
 
     updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
-    window.addEventListener("orientationchange", updateViewportHeight);
+
+    const handleViewportChange = () => {
+      window.requestAnimationFrame(updateViewportHeight);
+      setTimeout(updateViewportHeight, 80);
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", handleViewportChange);
+    window.addEventListener("orientationchange", handleViewportChange);
 
     return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
-      window.removeEventListener("orientationchange", updateViewportHeight);
+      window.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("scroll", handleViewportChange);
+      window.removeEventListener("orientationchange", handleViewportChange);
+      document.body.classList.remove("keyboard-open", "mobile-drawer-open");
     };
-  }, []);
+  }, [showSidebar]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -217,8 +229,11 @@ function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
+      if (event === "PASSWORD_RECOVERY") {
+        setAuthMessage("Можно задать новый пароль через кнопку «Изменить пароль» после входа.");
+      }
     });
 
     return () => listener.subscription.unsubscribe();
@@ -689,10 +704,20 @@ function App() {
     if (!message?.file_url) return;
 
     const url = getFileDownloadUrl(message);
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
 
-    if (!opened) {
-      window.location.href = url;
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.download = message.file_name || "iriska-file";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.warn("FILE OPEN FALLBACK:", error);
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) window.location.href = url;
     }
   }
 
@@ -712,6 +737,49 @@ function App() {
       .from("profiles")
       .update({ online_at: new Date().toISOString() })
       .eq("id", currentSession.user.id);
+  }
+
+  async function resetPasswordByEmail() {
+    const value = email.trim();
+
+    if (!value) {
+      setAuthMessage("Введи email, к которому привязан аккаунт");
+      return;
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(value, {
+      redirectTo: SITE_URL,
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setAuthMessage("Ссылка для смены пароля отправлена на почту.");
+  }
+
+  async function changeMyPassword() {
+    const nextPassword = window.prompt("Введите новый пароль минимум 6 символов:");
+
+    if (!nextPassword) return;
+
+    if (nextPassword.length < 6) {
+      alert("Пароль должен быть минимум 6 символов");
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: nextPassword,
+    });
+
+    if (error) {
+      console.error("CHANGE PASSWORD ERROR:", error);
+      alert(error.message || "Не удалось изменить пароль");
+      return;
+    }
+
+    alert("Пароль изменён");
   }
 
   async function register() {
@@ -2261,6 +2329,52 @@ function App() {
     setShowSidebar(true);
   }
 
+  function closeAllFloatingPanels() {
+    setIsChatOptionsOpen(false);
+    setIsUserProfileOpen(false);
+    setActionMessage(null);
+    setForwardMessage(null);
+    setActionChat(null);
+    setIsAppearanceOpen(false);
+    setIsBlockedUsersOpen(false);
+  }
+
+  function handleAppTouchStart(event) {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+
+    swipeStartXRef.current = touch.clientX;
+    swipeStartYRef.current = touch.clientY;
+  }
+
+  function handleAppTouchEnd(event) {
+    const touch = event.changedTouches?.[0];
+    const startX = swipeStartXRef.current;
+    const startY = swipeStartYRef.current;
+
+    swipeStartXRef.current = null;
+    swipeStartYRef.current = null;
+
+    if (!touch || startX === null || startY === null) return;
+
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const horizontalSwipe = Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.4;
+
+    if (!horizontalSwipe) return;
+
+    if (startX < 28 && dx > 0) {
+      closeAllFloatingPanels();
+      setShowSidebar(true);
+      return;
+    }
+
+    if (showSidebar && selectedChatRef.current?.id && dx < -70) {
+      closeAllFloatingPanels();
+      setShowSidebar(false);
+    }
+  }
+
   function renderAvatar(user) {
     if (user?.avatar_url) {
       return <img className="avatar-img" src={user.avatar_url} alt="avatar" />;
@@ -2312,13 +2426,19 @@ function App() {
         authMessage={authMessage}
         register={register}
         login={login}
+        resetPasswordByEmail={resetPasswordByEmail}
       />
     );
   }
 
   return (
-    <div className={`app theme-${theme}`} data-theme={theme}>
-      <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
+    <div className={`app theme-${theme} ${showSidebar ? "drawer-open" : "drawer-closed"}`} data-theme={theme} onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
+      <aside className={`sidebar mobile-drawer ${showSidebar ? "show" : "hide"}`}>
+        {selectedChat && (
+          <button type="button" className="sidebar-close-btn" onClick={() => setShowSidebar(false)}>
+            ×
+          </button>
+        )}
         <div className="logo">
           <label className="profile-avatar">
             <input type="file" accept="image/*" onChange={uploadAvatar} />
@@ -2342,6 +2462,9 @@ function App() {
         <div className="sidebar-action-grid">
           <button type="button" className="sidebar-mini-action" onClick={requestMobileNotifications}>
             🔔 Уведомления
+          </button>
+          <button type="button" className="sidebar-mini-action" onClick={changeMyPassword}>
+            🔐 Изменить пароль
           </button>
           <button type="button" className="sidebar-mini-action" onClick={toggleTheme}>
             {theme === "dark" ? "☀️ Светлая" : "🌙 Тёмная"}
@@ -2439,7 +2562,16 @@ function App() {
         </div>
       </aside>
 
-      <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
+      {showSidebar && selectedChat && (
+        <button
+          type="button"
+          className="sidebar-overlay"
+          aria-label="Закрыть меню"
+          onClick={() => setShowSidebar(false)}
+        />
+      )}
+
+      <main className={`chat ${showSidebar && !selectedChat ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
           <button
             className="back-btn"
