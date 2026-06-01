@@ -11,6 +11,13 @@ function UserProfile({
 }) {
   if (!isOpen || !user) return null;
 
+  const createdAt = user.created_at
+    ? new Date(user.created_at).toLocaleDateString("ru-RU")
+    : "—";
+
+  const description = user.description || "Описание пока не добавлено";
+  const status = user.status || (isOnline ? "В сети" : "Офлайн");
+
   return (
     <div className="user-profile-backdrop" onClick={onClose}>
       <div className="user-profile-card" onClick={(event) => event.stopPropagation()}>
@@ -23,9 +30,27 @@ function UserProfile({
         </div>
 
         <h2>{user.username || "Пользователь"}</h2>
+
         <p className={isOnline ? "profile-online" : "profile-offline"}>
           {isOnline ? "онлайн" : "офлайн"}
         </p>
+
+        <div className="profile-info-grid">
+          <div>
+            <span>Описание</span>
+            <strong>{description}</strong>
+          </div>
+
+          <div>
+            <span>Статус</span>
+            <strong>{status}</strong>
+          </div>
+
+          <div>
+            <span>Дата регистрации</span>
+            <strong>{createdAt}</strong>
+          </div>
+        </div>
 
         <div className="profile-actions">
           <button
