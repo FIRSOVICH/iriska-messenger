@@ -80,8 +80,9 @@ function App() {
   const hiddenChatIdsRef = useRef([]);
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
-  const swipeStartXRef = useRef(null);
-  const swipeStartYRef = useRef(null);
+  const drawerTouchStartXRef = useRef(null);
+  const drawerTouchCurrentXRef = useRef(null);
+
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -179,39 +180,29 @@ function App() {
 
   useEffect(() => {
     function updateViewportHeight() {
-      const viewport = window.visualViewport;
-      const height = Math.floor(viewport?.height || window.innerHeight || document.documentElement.clientHeight);
-      const offsetTop = Math.floor(viewport?.offsetTop || 0);
-      const keyboardIsOpen = Boolean(viewport && window.innerHeight - viewport.height > 120);
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const roundedHeight = Math.max(420, Math.floor(viewportHeight));
 
-      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
-      document.documentElement.style.setProperty("--iriska-viewport-offset-top", `${offsetTop}px`);
-      document.documentElement.style.setProperty("--iriska-safe-bottom", "env(safe-area-inset-bottom)");
+      document.documentElement.style.setProperty("--iriska-app-height", `${roundedHeight}px`);
 
-      document.body.classList.toggle("keyboard-open", keyboardIsOpen);
-      document.body.classList.toggle("mobile-drawer-open", isMobile() && showSidebar && Boolean(selectedChatRef.current));
+      const keyboardIsOpen =
+        window.visualViewport &&
+        window.innerHeight - window.visualViewport.height > 120;
+
+      document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
     }
 
     updateViewportHeight();
-
-    const handleViewportChange = () => {
-      window.requestAnimationFrame(updateViewportHeight);
-      setTimeout(updateViewportHeight, 80);
-    };
-
-    window.addEventListener("resize", handleViewportChange);
-    window.visualViewport?.addEventListener("resize", handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", handleViewportChange);
-    window.addEventListener("orientationchange", handleViewportChange);
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
 
     return () => {
-      window.removeEventListener("resize", handleViewportChange);
-      window.visualViewport?.removeEventListener("resize", handleViewportChange);
-      window.visualViewport?.removeEventListener("scroll", handleViewportChange);
-      window.removeEventListener("orientationchange", handleViewportChange);
-      document.body.classList.remove("keyboard-open", "mobile-drawer-open");
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
     };
-  }, [showSidebar]);
+  }, []);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -229,11 +220,8 @@ function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
 
-    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (event === "PASSWORD_RECOVERY") {
-        setAuthMessage("Можно задать новый пароль через кнопку «Изменить пароль» после входа.");
-      }
     });
 
     return () => listener.subscription.unsubscribe();
@@ -704,20 +692,10 @@ function App() {
     if (!message?.file_url) return;
 
     const url = getFileDownloadUrl(message);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
 
-    try {
-      const link = document.createElement("a");
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.download = message.file_name || "iriska-file";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (error) {
-      console.warn("FILE OPEN FALLBACK:", error);
-      const opened = window.open(url, "_blank", "noopener,noreferrer");
-      if (!opened) window.location.href = url;
+    if (!opened) {
+      window.location.href = url;
     }
   }
 
@@ -2329,52 +2307,6 @@ function App() {
     setShowSidebar(true);
   }
 
-  function closeAllFloatingPanels() {
-    setIsChatOptionsOpen(false);
-    setIsUserProfileOpen(false);
-    setActionMessage(null);
-    setForwardMessage(null);
-    setActionChat(null);
-    setIsAppearanceOpen(false);
-    setIsBlockedUsersOpen(false);
-  }
-
-  function handleAppTouchStart(event) {
-    const touch = event.touches?.[0];
-    if (!touch) return;
-
-    swipeStartXRef.current = touch.clientX;
-    swipeStartYRef.current = touch.clientY;
-  }
-
-  function handleAppTouchEnd(event) {
-    const touch = event.changedTouches?.[0];
-    const startX = swipeStartXRef.current;
-    const startY = swipeStartYRef.current;
-
-    swipeStartXRef.current = null;
-    swipeStartYRef.current = null;
-
-    if (!touch || startX === null || startY === null) return;
-
-    const dx = touch.clientX - startX;
-    const dy = touch.clientY - startY;
-    const horizontalSwipe = Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.4;
-
-    if (!horizontalSwipe) return;
-
-    if (startX < 28 && dx > 0) {
-      closeAllFloatingPanels();
-      setShowSidebar(true);
-      return;
-    }
-
-    if (showSidebar && selectedChatRef.current?.id && dx < -70) {
-      closeAllFloatingPanels();
-      setShowSidebar(false);
-    }
-  }
-
   function renderAvatar(user) {
     if (user?.avatar_url) {
       return <img className="avatar-img" src={user.avatar_url} alt="avatar" />;
@@ -2412,6 +2344,49 @@ function App() {
     return chat.lastMessage.text || "сообщение";
   }
 
+  function handleAppTouchStart(event) {
+    if (!isMobile()) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    drawerTouchStartXRef.current = touch.clientX;
+    drawerTouchCurrentXRef.current = touch.clientX;
+  }
+
+  function handleAppTouchMove(event) {
+    if (!isMobile()) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    drawerTouchCurrentXRef.current = touch.clientX;
+  }
+
+  function handleAppTouchEnd() {
+    if (!isMobile()) return;
+    const startX = drawerTouchStartXRef.current;
+    const currentX = drawerTouchCurrentXRef.current;
+    drawerTouchStartXRef.current = null;
+    drawerTouchCurrentXRef.current = null;
+
+    if (startX == null || currentX == null) return;
+
+    const distance = currentX - startX;
+
+    if (startX <= 34 && distance > 70) {
+      setShowSidebar(true);
+      return;
+    }
+
+    if (showSidebar && distance < -70) {
+      setShowSidebar(false);
+    }
+  }
+
+  function closeDrawer() {
+    if (isMobile()) {
+      setShowSidebar(false);
+    }
+  }
+
+
   if (!session) {
     return (
       <Auth
@@ -2432,13 +2407,20 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme} ${showSidebar ? "drawer-open" : "drawer-closed"}`} data-theme={theme} onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
-      <aside className={`sidebar mobile-drawer ${showSidebar ? "show" : "hide"}`}>
-        {selectedChat && (
-          <button type="button" className="sidebar-close-btn" onClick={() => setShowSidebar(false)}>
-            ×
-          </button>
-        )}
+    <div
+      className={`app theme-${theme} ${showSidebar ? "drawer-open" : ""}`}
+      data-theme={theme}
+      onTouchStart={handleAppTouchStart}
+      onTouchMove={handleAppTouchMove}
+      onTouchEnd={handleAppTouchEnd}
+    >
+      <button
+        type="button"
+        className={`mobile-drawer-backdrop ${showSidebar ? "show" : ""}`}
+        onClick={closeDrawer}
+        aria-label="Закрыть меню"
+      />
+      <aside className={`sidebar ${showSidebar ? "show" : "hide"}`}>
         <div className="logo">
           <label className="profile-avatar">
             <input type="file" accept="image/*" onChange={uploadAvatar} />
@@ -2562,16 +2544,7 @@ function App() {
         </div>
       </aside>
 
-      {showSidebar && selectedChat && (
-        <button
-          type="button"
-          className="sidebar-overlay"
-          aria-label="Закрыть меню"
-          onClick={() => setShowSidebar(false)}
-        />
-      )}
-
-      <main className={`chat ${showSidebar && !selectedChat ? "mobile-hidden" : ""}`}>
+      <main className={`chat ${showSidebar ? "mobile-hidden" : ""}`}>
         <header className="chat-header">
           <button
             className="back-btn"
@@ -2580,9 +2553,6 @@ function App() {
               setIsUserProfileOpen(false);
               setActionMessage(null);
               setForwardMessage(null);
-              setSelectedChat(null);
-              setSelectedUser(null);
-              setMessages([]);
               setShowSidebar(true);
             }}
           >
