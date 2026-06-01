@@ -35,6 +35,14 @@ function App() {
   const [isVoiceLocked, setIsVoiceLocked] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [voicePlayer, setVoicePlayer] = useState({ id: null, playing: false });
+  const [circlePlayer, setCirclePlayer] = useState({ id: null, playing: false });
+  const [isCircleRecorderOpen, setIsCircleRecorderOpen] = useState(false);
+  const [isCircleRecording, setIsCircleRecording] = useState(false);
+  const [circleSeconds, setCircleSeconds] = useState(0);
+  const [circlePreviewUrl, setCirclePreviewUrl] = useState(null);
+  const [circleBlob, setCircleBlob] = useState(null);
+  const [circleFilter, setCircleFilter] = useState("normal");
+  const [circleMask, setCircleMask] = useState("none");
   const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
@@ -80,6 +88,13 @@ function App() {
   const recordingStartedAtRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const activeAudioRef = useRef(null);
+  const activeCircleVideoRef = useRef(null);
+  const circleVideoRef = useRef(null);
+  const circleStreamRef = useRef(null);
+  const circleRecorderRef = useRef(null);
+  const circleChunksRef = useRef([]);
+  const circleStartedAtRef = useRef(null);
+  const circleTimerRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastTypingUpdateRef = useRef(0);
   const isRecordingRef = useRef(false);
@@ -163,7 +178,10 @@ function App() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    return () => cleanupVoiceMouseListeners();
+    return () => {
+      cleanupVoiceMouseListeners();
+      cleanupCircleRecorder();
+    };
   }, []);
 
   useEffect(() => {
@@ -547,6 +565,7 @@ function App() {
   function getNotificationBody(message) {
     if (message.message_type === "image") return "📷 Фото";
     if (message.message_type === "audio") return "🎤 Голосовое";
+    if (message.message_type === "circle") return "🎥 Кружочек";
     if (message.message_type === "file") return `📄 ${message.file_name || "Файл"}`;
     return message.text || "Новое сообщение";
   }
@@ -1925,6 +1944,7 @@ function App() {
     if (!message) return "Сообщение";
     if (message.message_type === "image") return "📷 Фото";
     if (message.message_type === "audio") return "🎤 Голосовое";
+    if (message.message_type === "circle") return "🎥 Кружочек";
     return message.text || "Сообщение";
   }
 
@@ -1973,6 +1993,7 @@ function App() {
           msg.reply_text,
           msg.message_type === "image" ? "фото" : "",
           msg.message_type === "audio" ? "голосовое" : "",
+          msg.message_type === "circle" ? "кружочек видео" : "",
         ]
           .filter(Boolean)
           .join(" " )
@@ -2298,6 +2319,277 @@ function App() {
   }
 
 
+  function cleanupCircleRecorder() {
+    clearInterval(circleTimerRef.current);
+
+    if (circlePreviewUrl) {
+      URL.revokeObjectURL(circlePreviewUrl);
+    }
+
+    if (circleStreamRef.current) {
+      circleStreamRef.current.getTracks().forEach((track) => track.stop());
+      circleStreamRef.current = null;
+    }
+
+    circleRecorderRef.current = null;
+    circleChunksRef.current = [];
+    circleStartedAtRef.current = null;
+  }
+
+  function resetCircleRecorderState() {
+    cleanupCircleRecorder();
+    setIsCircleRecording(false);
+    setCircleSeconds(0);
+    setCirclePreviewUrl(null);
+    setCircleBlob(null);
+  }
+
+  async function openCircleRecorder() {
+    if (!selectedChat?.id || !session?.user?.id) return;
+
+    if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
+      alert("Пользователь заблокирован. Кружочек не отправлен.");
+      return;
+    }
+
+    setIsCircleRecorderOpen(true);
+    setCirclePreviewUrl(null);
+    setCircleBlob(null);
+    setCircleSeconds(0);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 720 },
+          height: { ideal: 720 },
+        },
+        audio: true,
+      });
+
+      circleStreamRef.current = stream;
+
+      setTimeout(() => {
+        if (circleVideoRef.current) {
+          circleVideoRef.current.srcObject = stream;
+          circleVideoRef.current.play?.().catch(() => {});
+        }
+      }, 80);
+    } catch (error) {
+      console.error("CIRCLE CAMERA ERROR:", error);
+      setIsCircleRecorderOpen(false);
+      alert("Не удалось открыть камеру. Проверь разрешение камеры и микрофона.");
+    }
+  }
+
+  function closeCircleRecorder() {
+    resetCircleRecorderState();
+    setIsCircleRecorderOpen(false);
+  }
+
+  function startCircleRecording() {
+    if (!circleStreamRef.current || isCircleRecording) return;
+
+    if (!window.MediaRecorder) {
+      alert("Этот браузер не поддерживает запись видео. Попробуй Safari/Chrome поновее или PWA.");
+      return;
+    }
+
+    try {
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+        ? "video/webm;codecs=vp8,opus"
+        : "video/webm";
+
+      const recorder = new MediaRecorder(circleStreamRef.current, { mimeType });
+
+      circleChunksRef.current = [];
+      circleStartedAtRef.current = Date.now();
+
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size > 0) {
+          circleChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        clearInterval(circleTimerRef.current);
+
+        const blob = new Blob(circleChunksRef.current, {
+          type: recorder.mimeType || "video/webm",
+        });
+
+        const previewUrl = URL.createObjectURL(blob);
+
+        setCircleBlob(blob);
+        setCirclePreviewUrl(previewUrl);
+        setIsCircleRecording(false);
+        setCircleSeconds(
+          Math.max(1, Math.round((Date.now() - (circleStartedAtRef.current || Date.now())) / 1000))
+        );
+      };
+
+      circleRecorderRef.current = recorder;
+      recorder.start();
+      setIsCircleRecording(true);
+      setCircleSeconds(0);
+
+      clearInterval(circleTimerRef.current);
+      circleTimerRef.current = setInterval(() => {
+        setCircleSeconds((seconds) => {
+          const next = seconds + 1;
+
+          if (next >= 60) {
+            stopCircleRecording();
+          }
+
+          return next;
+        });
+      }, 1000);
+    } catch (error) {
+      console.error("CIRCLE RECORD ERROR:", error);
+      alert("Не удалось начать запись кружочка");
+    }
+  }
+
+  function stopCircleRecording() {
+    const recorder = circleRecorderRef.current;
+
+    if (!recorder || recorder.state === "inactive") {
+      setIsCircleRecording(false);
+      clearInterval(circleTimerRef.current);
+      return;
+    }
+
+    recorder.stop();
+  }
+
+  async function sendCircleMessage() {
+    if (!circleBlob || !selectedChat?.id || !session?.user?.id) return;
+
+    const tempId = crypto.randomUUID();
+    const previewUrl = circlePreviewUrl;
+
+    const localMessage = {
+      id: tempId,
+      sender_id: session.user.id,
+      chat_id: selectedChat.id,
+      text: "",
+      image_url: null,
+      audio_url: null,
+      file_url: null,
+      circle_url: previewUrl,
+      circle_duration: circleSeconds || 1,
+      circle_filter: circleFilter,
+      circle_mask: circleMask,
+      message_type: "circle",
+      reply_to_id: replyTo?.id || null,
+      reply_text: replyTo ? getReplyPreview(replyTo) : null,
+      reply_image_url: replyTo?.image_url || null,
+      reply_sender_id: replyTo?.sender_id || null,
+      reactions: {},
+      created_at: new Date().toISOString(),
+      pending: true,
+      is_deleted: false,
+    };
+
+    setMessages((current) => [...current, localMessage]);
+    setReplyTo(null);
+    setIsCircleRecorderOpen(false);
+
+    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${crypto.randomUUID()}.webm`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("circle-messages")
+      .upload(filePath, circleBlob, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: circleBlob.type || "video/webm",
+      });
+
+    if (uploadError) {
+      console.error("CIRCLE UPLOAD ERROR:", uploadError);
+      alert("Ошибка загрузки кружочка. Проверь bucket circle-messages.");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    const { data: publicData } = supabase.storage
+      .from("circle-messages")
+      .getPublicUrl(filePath);
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: session.user.id,
+        chat_id: selectedChat.id,
+        text: "",
+        image_url: null,
+        audio_url: null,
+        file_url: null,
+        circle_url: publicData.publicUrl,
+        circle_duration: circleSeconds || 1,
+        circle_filter: circleFilter,
+        circle_mask: circleMask,
+        message_type: "circle",
+        reply_to_id: localMessage.reply_to_id,
+        reply_text: localMessage.reply_text,
+        reply_image_url: localMessage.reply_image_url,
+        reply_sender_id: localMessage.reply_sender_id,
+        reactions: {},
+        is_deleted: false,
+      })
+      .select()
+      .single();
+
+    resetCircleRecorderState();
+
+    if (error) {
+      console.error("SEND CIRCLE MESSAGE ERROR:", error);
+      alert("Ошибка отправки кружочка. Проверь SQL-поля circle_url/circle_duration/circle_filter/circle_mask.");
+      setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((msg) => (msg.id === tempId ? data : msg))
+    );
+
+    markChatAsRead(selectedChat.id);
+    await loadMyChats();
+  }
+
+  function toggleCirclePlayback(message) {
+    if (!message?.circle_url) return;
+
+    const videoElement = document.getElementById(`circle-video-${message.id}`);
+
+    if (!videoElement) return;
+
+    if (activeCircleVideoRef.current && activeCircleVideoRef.current !== videoElement) {
+      activeCircleVideoRef.current.pause();
+    }
+
+    if (circlePlayer.id === message.id && circlePlayer.playing) {
+      videoElement.pause();
+      setCirclePlayer({ id: message.id, playing: false });
+      return;
+    }
+
+    activeCircleVideoRef.current = videoElement;
+
+    videoElement.currentTime = 0;
+    videoElement.play().catch((error) => {
+      console.error("CIRCLE PLAY ERROR:", error);
+    });
+
+    setCirclePlayer({ id: message.id, playing: true });
+
+    videoElement.onended = () => {
+      setCirclePlayer({ id: null, playing: false });
+      activeCircleVideoRef.current = null;
+    };
+  }
+
   async function saveMyProfileSettings() {
     const currentSession = sessionRef.current || session;
 
@@ -2445,6 +2737,12 @@ function App() {
       return chat.lastMessage.sender_id === session.user.id
         ? "Вы: 🎤 Голосовое"
         : "🎤 Голосовое";
+    }
+
+    if (chat.lastMessage.message_type === "circle") {
+      return chat.lastMessage.sender_id === session.user.id
+        ? "Вы: 🎥 Кружочек"
+        : "🎥 Кружочек";
     }
 
     if (chat.lastMessage.message_type === "file") {
@@ -2869,6 +3167,46 @@ function App() {
                   </div>
                   <span className="voice-label">{formatVoiceTime(msg.audio_duration || 0)}</span>
                 </div>
+              ) : msg.message_type === "circle" && msg.circle_url ? (
+                <div className={`circle-message circle-filter-${msg.circle_filter || "normal"}`}>
+                  <div className="circle-video-shell">
+                    <video
+                      id={`circle-video-${msg.id}`}
+                      className="circle-chat-video"
+                      src={msg.circle_url}
+                      playsInline
+                      preload="metadata"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCirclePlayback(msg);
+                      }}
+                    />
+                    {msg.circle_mask && msg.circle_mask !== "none" && (
+                      <div className={`circle-chat-mask circle-mask-${msg.circle_mask}`}>
+                        {msg.circle_mask === "glasses"
+                          ? "😎"
+                          : msg.circle_mask === "crown"
+                            ? "👑"
+                            : msg.circle_mask === "fire"
+                              ? "🔥"
+                              : msg.circle_mask === "demon"
+                                ? "😈"
+                                : ""}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="circle-play-btn"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCirclePlayback(msg);
+                      }}
+                    >
+                      {circlePlayer.id === msg.id && circlePlayer.playing ? "⏸" : "▶"}
+                    </button>
+                  </div>
+                  <span className="circle-duration">{formatVoiceTime(msg.circle_duration || 0)}</span>
+                </div>
               ) : msg.message_type === "file" && msg.file_url ? (
                 <button
                   type="button"
@@ -2973,6 +3311,16 @@ function App() {
                 }}
               />
             </label>
+
+            <button
+              type="button"
+              className="circle-open-btn"
+              disabled={!selectedChat}
+              onClick={openCircleRecorder}
+              title="Кружочек"
+            >
+              🎥
+            </button>
 
             <button
               type="button"
@@ -3300,6 +3648,133 @@ function App() {
         </div>
       )}
 
+
+      {isCircleRecorderOpen && (
+        <div className="circle-recorder-backdrop" onClick={closeCircleRecorder}>
+          <div className="circle-recorder-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="circle-recorder-header">
+              <div>
+                <h3>🎥 Кружочек</h3>
+                <p>{isCircleRecording ? `Запись ${formatVoiceTime(circleSeconds)}` : circlePreviewUrl ? "Предпросмотр" : "Выбери фильтр и запиши"}</p>
+              </div>
+              <button type="button" onClick={closeCircleRecorder}>×</button>
+            </div>
+
+            <div className={`circle-camera-wrap circle-filter-${circleFilter}`}>
+              {!circlePreviewUrl ? (
+                <video
+                  ref={circleVideoRef}
+                  className="circle-camera-video"
+                  muted
+                  playsInline
+                  autoPlay
+                />
+              ) : (
+                <video
+                  className="circle-camera-video"
+                  src={circlePreviewUrl}
+                  controls
+                  playsInline
+                />
+              )}
+
+              {circleMask !== "none" && (
+                <div className={`circle-live-mask circle-mask-${circleMask}`}>
+                  {circleMask === "glasses"
+                    ? "😎"
+                    : circleMask === "crown"
+                      ? "👑"
+                      : circleMask === "fire"
+                        ? "🔥"
+                        : circleMask === "demon"
+                          ? "😈"
+                          : ""}
+                </div>
+              )}
+
+              {isCircleRecording && <div className="circle-rec-dot">● REC</div>}
+            </div>
+
+            <div className="circle-tools">
+              <p>Фильтр</p>
+              <div className="circle-tool-row">
+                {[
+                  ["normal", "Обычный"],
+                  ["smooth", "Ретушь"],
+                  ["cinema", "Кино"],
+                  ["neon", "Неон"],
+                  ["bw", "B/W"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    className={circleFilter === value ? "active" : ""}
+                    onClick={() => setCircleFilter(value)}
+                    disabled={isCircleRecording}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <p>Маска</p>
+              <div className="circle-tool-row">
+                {[
+                  ["none", "Без"],
+                  ["glasses", "😎"],
+                  ["crown", "👑"],
+                  ["fire", "🔥"],
+                  ["demon", "😈"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    className={circleMask === value ? "active" : ""}
+                    onClick={() => setCircleMask(value)}
+                    disabled={isCircleRecording}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="circle-recorder-actions">
+              {!circlePreviewUrl ? (
+                <>
+                  {!isCircleRecording ? (
+                    <button type="button" className="circle-record-btn" onClick={startCircleRecording}>
+                      ● Записать
+                    </button>
+                  ) : (
+                    <button type="button" className="circle-stop-btn" onClick={stopCircleRecording}>
+                      ■ Стоп
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button type="button" className="circle-redo-btn" onClick={() => {
+                    if (circlePreviewUrl) URL.revokeObjectURL(circlePreviewUrl);
+                    setCirclePreviewUrl(null);
+                    setCircleBlob(null);
+                    setCircleSeconds(0);
+                    if (circleVideoRef.current && circleStreamRef.current) {
+                      circleVideoRef.current.srcObject = circleStreamRef.current;
+                      circleVideoRef.current.play?.().catch(() => {});
+                    }
+                  }}>
+                    ↩ Перезаписать
+                  </button>
+                  <button type="button" className="circle-send-btn" onClick={sendCircleMessage}>
+                    Отправить
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {fullscreenImage && (
         <div className="photo-viewer" onClick={() => setFullscreenImage(null)}>
