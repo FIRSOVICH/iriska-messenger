@@ -94,12 +94,6 @@ function App() {
   }, [session]);
 
   useEffect(() => {
-    if (!selectedChat?.id && isMobile()) {
-      setShowSidebar(true);
-    }
-  }, [selectedChat?.id]);
-
-  useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
@@ -182,12 +176,13 @@ function App() {
   }, [notificationSound]);
 
   useEffect(() => {
-    function setStableAppHeight() {
-      const height = Math.max(560, Math.floor(window.innerHeight || document.documentElement.clientHeight || 720));
-      document.documentElement.style.setProperty("--iriska-app-height", `${height}px`);
-    }
+    function updateViewportHeight() {
+      // Важно для iPhone/Safari: НЕ уменьшаем высоту приложения до visualViewport.height.
+      // Иначе при открытии клавиатуры чат сжимается, появляется чёрная зона и интерфейс уезжает.
+      const stableHeight = Math.max(520, Math.floor(window.innerHeight || document.documentElement.clientHeight || 0));
 
-    function detectKeyboard() {
+      document.documentElement.style.setProperty("--iriska-app-height", `${stableHeight}px`);
+
       const keyboardIsOpen =
         window.visualViewport &&
         window.innerHeight - window.visualViewport.height > 120;
@@ -195,19 +190,15 @@ function App() {
       document.body.classList.toggle("keyboard-open", Boolean(keyboardIsOpen));
     }
 
-    setStableAppHeight();
-    detectKeyboard();
-
-    window.addEventListener("resize", setStableAppHeight);
-    window.addEventListener("orientationchange", () => setTimeout(setStableAppHeight, 250));
-    window.visualViewport?.addEventListener("resize", detectKeyboard);
-    window.visualViewport?.addEventListener("scroll", detectKeyboard);
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
 
     return () => {
-      window.removeEventListener("resize", setStableAppHeight);
-      window.removeEventListener("orientationchange", setStableAppHeight);
-      window.visualViewport?.removeEventListener("resize", detectKeyboard);
-      window.visualViewport?.removeEventListener("scroll", detectKeyboard);
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
     };
   }, []);
 
@@ -864,6 +855,7 @@ function App() {
     );
 
     const visibleChats = chats.filter((chat) => {
+      if (hiddenChatIdsRef.current.includes(chat.id)) return false;
       if (chat.otherUser?.id && blockedUserIdsRef.current.includes(chat.otherUser.id)) return false;
       return true;
     });
@@ -887,6 +879,12 @@ function App() {
       if (updated) {
         setSelectedChat(updated);
         setSelectedUser(updated.otherUser);
+      } else if (hiddenChatIdsRef.current.includes(currentSelected.id)) {
+        setSelectedChat(null);
+        setSelectedUser(null);
+        setMessages([]);
+        setReplyTo(null);
+        if (isMobile()) setShowSidebar(true);
       }
     }
   }
