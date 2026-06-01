@@ -2580,7 +2580,7 @@ function App() {
             </div>
           </button>
 
-          {selectedChat && (
+          {selectedChat ? (
             <button
               type="button"
               className="chat-options-btn"
@@ -2588,6 +2588,15 @@ function App() {
               aria-label="Меню чата"
             >
               ⋮
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="chat-options-btn home-edit-btn"
+              onClick={() => setIsMyProfileOpen(true)}
+              aria-label="Редактировать профиль"
+            >
+              ✎
             </button>
           )}
 

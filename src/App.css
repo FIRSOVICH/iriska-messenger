@@ -3580,3 +3580,224 @@ body {
     font-size: 21px;
   }
 }
+
+
+/* === IRISKA MENU + TYPOGRAPHY RESTORE FIX ===
+   Не трогаем клавиатуру. Чиним только меню, размеры и кнопку редактирования. */
+@media (max-width: 768px) {
+  .sidebar.show,
+  .sidebar.drawer-open {
+    width: min(86vw, 360px) !important;
+    min-width: 0 !important;
+    height: var(--iriska-app-height, 100svh) !important;
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    transform: translateX(0) !important;
+    z-index: 3000 !important;
+    display: block !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 90px) !important;
+    background: rgba(15, 23, 42, 0.97) !important;
+    border-right: 1px solid rgba(148, 163, 184, 0.22) !important;
+    box-shadow: 28px 0 90px rgba(0, 0, 0, 0.55) !important;
+  }
+
+  .sidebar.hide {
+    transform: translateX(-105%) !important;
+  }
+
+  /* Возвращаем нормальное меню: профиль, Ириска, кнопки, оформление. */
+  .sidebar.show .logo,
+  .sidebar.show .logout,
+  .sidebar.show .sidebar-action-grid,
+  .sidebar.show .blocked-users-button,
+  .sidebar.drawer-open .logo,
+  .sidebar.drawer-open .logout,
+  .sidebar.drawer-open .sidebar-action-grid,
+  .sidebar.drawer-open .blocked-users-button {
+    display: flex !important;
+  }
+
+  .sidebar.show .sidebar-action-grid,
+  .sidebar.drawer-open .sidebar-action-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px !important;
+    margin: 14px 0 !important;
+  }
+
+  .sidebar.show .logo,
+  .sidebar.drawer-open .logo {
+    align-items: center !important;
+    gap: 12px !important;
+    padding-right: 48px !important;
+    margin-bottom: 14px !important;
+  }
+
+  .sidebar.show .logo h1,
+  .sidebar.drawer-open .logo h1 {
+    display: block !important;
+    font-size: 28px !important;
+    line-height: 1.05 !important;
+    color: #fff !important;
+    margin: 0 !important;
+  }
+
+  .sidebar.show .logo p,
+  .sidebar.drawer-open .logo p {
+    display: block !important;
+    color: #aab4c8 !important;
+    font-size: 13px !important;
+    margin-top: 4px !important;
+  }
+
+  .sidebar.show .profile-avatar,
+  .sidebar.drawer-open .profile-avatar {
+    width: 50px !important;
+    height: 50px !important;
+    min-width: 50px !important;
+    border-radius: 16px !important;
+  }
+
+  .sidebar.show .logout,
+  .sidebar.drawer-open .logout {
+    width: 100% !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    border-radius: 16px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 14px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .sidebar.show .sidebar-mini-action,
+  .sidebar.drawer-open .sidebar-mini-action,
+  .sidebar.show .blocked-users-button,
+  .sidebar.drawer-open .blocked-users-button {
+    min-height: 48px !important;
+    padding: 10px 12px !important;
+    border-radius: 16px !important;
+    font-size: 13px !important;
+    line-height: 1.2 !important;
+  }
+
+  .drawer-close-btn {
+    display: inline-flex !important;
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    border-radius: 15px !important;
+    font-size: 24px !important;
+    top: calc(env(safe-area-inset-top) + 14px) !important;
+    right: 14px !important;
+  }
+
+  /* В меню убираем дубликат списка чатов. Чаты уже на главном экране. */
+  .sidebar.show > .search-input,
+  .sidebar.drawer-open > .search-input,
+  .sidebar.show > .block,
+  .sidebar.drawer-open > .block {
+    display: none !important;
+  }
+
+  .chat-header {
+    height: 86px !important;
+    min-height: 86px !important;
+    padding: 12px 28px 10px !important;
+    gap: 10px !important;
+  }
+
+  .back-btn,
+  .chat-options-btn,
+  .home-edit-btn {
+    width: 50px !important;
+    height: 50px !important;
+    min-width: 50px !important;
+    border-radius: 17px !important;
+    font-size: 24px !important;
+  }
+
+  .chat-header .chat-user-button h2 {
+    font-size: 28px !important;
+    line-height: 1.04 !important;
+    font-weight: 850 !important;
+    color: #fff !important;
+  }
+
+  .chat-header .chat-user-button p {
+    display: block !important;
+    font-size: 14px !important;
+    color: #aab4c8 !important;
+    margin-top: 5px !important;
+  }
+
+  .mobile-home-chats {
+    padding: 16px 26px 96px !important;
+  }
+
+  .mobile-home-search {
+    height: 54px !important;
+    border-radius: 20px !important;
+    font-size: 17px !important;
+    margin-bottom: 26px !important;
+  }
+
+  .mobile-home-title {
+    font-size: 16px !important;
+    letter-spacing: .22em !important;
+    margin: 12px 0 16px !important;
+  }
+
+  .mobile-home-chat-list,
+  .mobile-home-search-results {
+    gap: 12px !important;
+  }
+
+  .mobile-chat-card {
+    min-height: 74px !important;
+    border-radius: 22px !important;
+    padding: 13px 16px !important;
+  }
+
+  .mobile-chat-card .avatar {
+    width: 48px !important;
+    height: 48px !important;
+    min-width: 48px !important;
+    border-radius: 16px !important;
+    font-size: 20px !important;
+  }
+
+  .mobile-chat-card h3 {
+    font-size: 19px !important;
+    line-height: 1.1 !important;
+  }
+
+  .mobile-chat-card p {
+    font-size: 14px !important;
+    line-height: 1.2 !important;
+  }
+
+  .online-dot,
+  .offline-dot {
+    width: 9px !important;
+    height: 9px !important;
+    min-width: 9px !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .chat-header .chat-user-button h2 {
+    font-size: 26px !important;
+  }
+  .mobile-home-chats {
+    padding-inline: 18px !important;
+  }
+  .mobile-chat-card h3 {
+    font-size: 18px !important;
+  }
+  .mobile-chat-card p {
+    font-size: 13px !important;
+  }
+}
