@@ -41,10 +41,8 @@ function App() {
   const [circleSeconds, setCircleSeconds] = useState(0);
   const [circlePreviewUrl, setCirclePreviewUrl] = useState(null);
   const [circleBlob, setCircleBlob] = useState(null);
-  const [circleFilter, setCircleFilter] = useState("normal");
-  const [circleMask, setCircleMask] = useState("none");
-  const [circleMaskStyle, setCircleMaskStyle] = useState({ x: 50, y: 18, scale: 1 });
-  const [typingUser, setTypingUser] = useState(null);
+  const [circleFilter, setCircleFilter] = useState("smooth");
+    const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
   const [messageSearch, setMessageSearch] = useState("");
@@ -96,7 +94,6 @@ function App() {
   const circleChunksRef = useRef([]);
   const circleStartedAtRef = useRef(null);
   const circleTimerRef = useRef(null);
-  const circleFaceTrackingRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastTypingUpdateRef = useRef(0);
   const isRecordingRef = useRef(false);
@@ -2324,10 +2321,6 @@ function App() {
   function cleanupCircleRecorder() {
     clearInterval(circleTimerRef.current);
 
-    if (circleFaceTrackingRef.current) {
-      cancelAnimationFrame(circleFaceTrackingRef.current);
-      circleFaceTrackingRef.current = null;
-    }
 
     if (circlePreviewUrl) {
       URL.revokeObjectURL(circlePreviewUrl);
@@ -2341,7 +2334,6 @@ function App() {
     circleRecorderRef.current = null;
     circleChunksRef.current = [];
     circleStartedAtRef.current = null;
-    setCircleMaskStyle({ x: 50, y: 18, scale: 1 });
   }
 
   function resetCircleRecorderState() {
@@ -2350,69 +2342,6 @@ function App() {
     setCircleSeconds(0);
     setCirclePreviewUrl(null);
     setCircleBlob(null);
-  }
-
-  function startCircleFaceTracking() {
-    if (circleFaceTrackingRef.current) {
-      cancelAnimationFrame(circleFaceTrackingRef.current);
-      circleFaceTrackingRef.current = null;
-    }
-
-    const video = circleVideoRef.current;
-
-    if (!video) return;
-
-    const hasFaceDetector = "FaceDetector" in window;
-
-    if (!hasFaceDetector) {
-      setCircleMaskStyle({ x: 50, y: 16, scale: 1 });
-      return;
-    }
-
-    let detector = null;
-
-    try {
-      detector = new window.FaceDetector({
-        fastMode: true,
-        maxDetectedFaces: 1,
-      });
-    } catch (error) {
-      setCircleMaskStyle({ x: 50, y: 16, scale: 1 });
-      return;
-    }
-
-    const tick = async () => {
-      try {
-        if (!circleVideoRef.current || circleVideoRef.current.readyState < 2) {
-          circleFaceTrackingRef.current = requestAnimationFrame(tick);
-          return;
-        }
-
-        const faces = await detector.detect(circleVideoRef.current);
-
-        if (faces?.[0]?.boundingBox) {
-          const box = faces[0].boundingBox;
-          const videoWidth = circleVideoRef.current.videoWidth || 1;
-          const videoHeight = circleVideoRef.current.videoHeight || 1;
-
-          const centerX = ((box.x + box.width / 2) / videoWidth) * 100;
-          const topY = (box.y / videoHeight) * 100;
-          const scale = Math.min(1.35, Math.max(0.75, box.width / (videoWidth * 0.38)));
-
-          setCircleMaskStyle({
-            x: Math.round(centerX),
-            y: Math.max(3, Math.round(topY - 6)),
-            scale,
-          });
-        }
-      } catch (error) {
-        // Тихий fallback: маска остаётся по центру.
-      }
-
-      circleFaceTrackingRef.current = requestAnimationFrame(tick);
-    };
-
-    circleFaceTrackingRef.current = requestAnimationFrame(tick);
   }
 
   async function openCircleRecorder() {
@@ -2445,10 +2374,8 @@ function App() {
           circleVideoRef.current.srcObject = stream;
           circleVideoRef.current.onloadedmetadata = () => {
             circleVideoRef.current?.play?.().catch(() => {});
-            startCircleFaceTracking();
           };
           circleVideoRef.current.play?.().catch(() => {});
-          startCircleFaceTracking();
         }
       }, 120);
     } catch (error) {
@@ -2563,8 +2490,8 @@ function App() {
       file_url: null,
       circle_url: previewUrl,
       circle_duration: circleSeconds || 1,
-      circle_filter: circleFilter,
-      circle_mask: circleMask,
+      circle_filter: "smooth",
+      circle_mask: "none",
       message_type: "circle",
       reply_to_id: replyTo?.id || null,
       reply_text: replyTo ? getReplyPreview(replyTo) : null,
@@ -2615,8 +2542,8 @@ function App() {
         file_url: null,
         circle_url: publicData.publicUrl,
         circle_duration: circleSeconds || 1,
-        circle_filter: circleFilter,
-        circle_mask: circleMask,
+        circle_filter: "smooth",
+        circle_mask: "none",
         message_type: "circle",
         reply_to_id: localMessage.reply_to_id,
         reply_text: localMessage.reply_text,
@@ -3382,9 +3309,19 @@ function App() {
             </div>
           )}
 
-          <div className="input-area">
-            <div className="input-media-controls">
-              <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
+          <div className="input-area telegram-input-area">
+            <div className="input-left-actions">
+              <button
+                type="button"
+                className="circle-open-btn"
+                disabled={!selectedChat}
+                onClick={openCircleRecorder}
+                title="Кружочек"
+              >
+                🎥
+              </button>
+
+              <label className={`image-btn ${!selectedChat ? "disabled" : ""}`} title="Прикрепить файл">
                 📎
                 <input
                   type="file"
@@ -3401,33 +3338,10 @@ function App() {
                   }}
                 />
               </label>
-
-              <button
-                type="button"
-                className="circle-open-btn"
-                disabled={!selectedChat}
-                onClick={openCircleRecorder}
-                title="Кружочек"
-              >
-                🎥
-              </button>
-
-              <button
-                type="button"
-                className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
-                disabled={!selectedChat}
-                onMouseDown={startVoiceRecording}
-                onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
-                onMouseLeave={handleVoiceMouseLeave}
-                onTouchStart={startVoiceRecording}
-                onTouchMove={handleVoiceTouchMove}
-                onTouchEnd={handleVoiceTouchEnd}
-              >
-                {isRecording ? "●" : "🎤"}
-              </button>
             </div>
 
             <input
+              className="telegram-message-input"
               value={text}
               disabled={!selectedChat}
               onChange={handleTextChange}
@@ -3437,9 +3351,31 @@ function App() {
               }
             />
 
-            <button onClick={sendMessage} disabled={!selectedChat}>
-              {editingMessage ? "Сохранить" : "Отправить"}
-            </button>
+            {text.trim() || editingMessage ? (
+              <button
+                type="button"
+                className="input-send-btn"
+                onClick={sendMessage}
+                disabled={!selectedChat}
+              >
+                {editingMessage ? "✓" : "➤"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={`voice-btn input-voice-right ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
+                disabled={!selectedChat}
+                onMouseDown={startVoiceRecording}
+                onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
+                onMouseLeave={handleVoiceMouseLeave}
+                onTouchStart={startVoiceRecording}
+                onTouchMove={handleVoiceTouchMove}
+                onTouchEnd={handleVoiceTouchEnd}
+                title="Голосовое"
+              >
+                🎤
+              </button>
+            )}
           </div>
         </footer>
       </main>
@@ -3745,13 +3681,21 @@ function App() {
           <div className="circle-recorder-modal" onClick={(event) => event.stopPropagation()}>
             <div className="circle-recorder-header">
               <div>
-                <h3>🎥 Кружочек</h3>
-                <p>{isCircleRecording ? `Запись ${formatVoiceTime(circleSeconds)}` : circlePreviewUrl ? "Предпросмотр" : "Выбери фильтр и запиши"}</p>
+                <h3>Кружочек</h3>
+                <p>
+                  {isCircleRecording
+                    ? `Запись ${formatVoiceTime(circleSeconds)}`
+                    : circlePreviewUrl
+                      ? "Пересмотри и отправь"
+                      : "Ретушь включена"}
+                </p>
               </div>
               <button type="button" onClick={closeCircleRecorder}>×</button>
             </div>
 
-            <div className={`circle-camera-wrap circle-filter-${circleFilter}`}>
+            <div className="circle-retouch-badge">Ретушь лица включена</div>
+
+            <div className="circle-camera-wrap circle-filter-smooth">
               {!circlePreviewUrl ? (
                 <video
                   ref={circleVideoRef}
@@ -3761,84 +3705,31 @@ function App() {
                   autoPlay
                 />
               ) : (
-                <video
-                  className="circle-camera-video"
-                  src={circlePreviewUrl}
-                  controls
-                  playsInline
-                  loop
-                />
-              )}
-
-              {circleMask !== "none" && (
-                <div
-                  className={`circle-live-mask circle-mask-${circleMask}`}
-                  style={{
-                    "--mask-x": `${circleMaskStyle.x}%`,
-                    "--mask-y": `${circleMaskStyle.y}%`,
-                    "--mask-scale": circleMaskStyle.scale,
-                  }}
-                >
-                  {circleMask === "glasses"
-                    ? "😎"
-                    : circleMask === "crown"
-                      ? "👑"
-                      : circleMask === "fire"
-                        ? "🔥"
-                        : circleMask === "demon"
-                          ? "😈"
-                          : circleMask === "bunny"
-                            ? "🐰"
-                            : ""}
-                </div>
-              )}
-
-              {isCircleRecording && <div className="circle-rec-dot">● REC</div>}
-            </div>
-
-            <div className="circle-tools">
-              <p>Фильтр</p>
-              <div className="circle-tool-row">
-                {[
-                  ["normal", "Обычный"],
-                  ["smooth", "Ретушь"],
-                  ["cinema", "Кино"],
-                  ["neon", "Неон"],
-                  ["bw", "B/W"],
-                ].map(([value, label]) => (
+                <>
+                  <video
+                    id="circle-preview-video"
+                    className="circle-camera-video circle-preview-video"
+                    src={circlePreviewUrl}
+                    controls
+                    playsInline
+                    preload="auto"
+                  />
                   <button
                     type="button"
-                    key={value}
-                    className={circleFilter === value ? "active" : ""}
-                    onClick={() => setCircleFilter(value)}
-                    disabled={isCircleRecording}
+                    className="circle-preview-play"
+                    onClick={() => {
+                      const video = document.getElementById("circle-preview-video");
+                      if (!video) return;
+                      video.currentTime = 0;
+                      video.play?.().catch(() => {});
+                    }}
                   >
-                    {label}
+                    ▶ Пересмотреть
                   </button>
-                ))}
-              </div>
+                </>
+              )}
 
-              <p>Маска</p>
-              <div className="circle-tool-row">
-                {[
-                  ["none", "Без"],
-                  ["glasses", "😎"],
-                  ["crown", "👑"],
-                  ["fire", "🔥"],
-                  ["demon", "😈"],
-                  ["bunny", "🐰"],
-                ].map(([value, label]) => (
-                  <button
-                    type="button"
-                    key={value}
-                    className={circleMask === value ? "active" : ""}
-                    onClick={() => setCircleMask(value)}
-                    disabled={isCircleRecording}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              {isCircleRecording && <div className="circle-rec-dot">REC</div>}
             </div>
 
             <div className="circle-recorder-actions">
@@ -3846,11 +3737,11 @@ function App() {
                 <>
                   {!isCircleRecording ? (
                     <button type="button" className="circle-record-btn" onClick={startCircleRecording}>
-                      ● Записать
+                      Записать
                     </button>
                   ) : (
                     <button type="button" className="circle-stop-btn" onClick={stopCircleRecording}>
-                      ■ Стоп
+                      Стоп
                     </button>
                   )}
                 </>
@@ -3866,7 +3757,7 @@ function App() {
                       circleVideoRef.current.play?.().catch(() => {});
                     }
                   }}>
-                    ↩ Перезаписать
+                    Перезаписать
                   </button>
                   <button type="button" className="circle-send-btn" onClick={sendCircleMessage}>
                     Отправить
