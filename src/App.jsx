@@ -143,6 +143,8 @@ function App() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const processedCallSignalsRef = useRef(new Set());
+  const callListenStartedAtRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -489,6 +491,30 @@ function App() {
 
     if (!currentSession?.user?.id) return;
 
+    callListenStartedAtRef.current = new Date(Date.now() - 45000).toISOString();
+
+    const pollRecentCallSignals = async () => {
+      const startedAt = callListenStartedAtRef.current;
+      if (!startedAt) return;
+
+      const { data, error } = await supabase
+        .from("call_signals")
+        .select("*")
+        .eq("receiver_id", currentSession.user.id)
+        .gt("created_at", startedAt)
+        .order("created_at", { ascending: true })
+        .limit(80);
+
+      if (error) {
+        console.warn("CALL SIGNAL POLL ERROR:", error);
+        return;
+      }
+
+      (data || []).forEach((row) => {
+        handleCallSignal(row);
+      });
+    };
+
     const callsChannel = supabase
       .channel(`call-signals-${currentSession.user.id}`)
       .on(
@@ -503,12 +529,18 @@ function App() {
           handleCallSignal(payload.new);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("CALL REALTIME STATUS:", status);
+      });
+
+    pollRecentCallSignals();
+    const callsPollTimer = setInterval(pollRecentCallSignals, 1200);
 
     return () => {
+      clearInterval(callsPollTimer);
       supabase.removeChannel(callsChannel);
     };
-  }, [session?.user?.id, myChats.length]);
+  }, [session?.user?.id]);
 
   async function initUser() {
     await createProfileIfMissing();
@@ -2905,6 +2937,22 @@ function App() {
     }, 80);
   }
 
+  async function flushPendingIceCandidates() {
+    const peerConnection = peerConnectionRef.current;
+    if (!peerConnection || pendingIceCandidatesRef.current.length === 0) return;
+
+    const pendingCandidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+
+    for (const candidate of pendingCandidates) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.warn("PENDING CALL ICE ERROR:", error);
+      }
+    }
+  }
+
   function createPeerConnection(callId, chatId, receiverId) {
     const peerConnection = new RTCPeerConnection({
       iceServers: [
@@ -3051,6 +3099,7 @@ function App() {
       localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
 
       await peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.offer));
+      await flushPendingIceCandidates();
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
 
@@ -3111,6 +3160,7 @@ function App() {
     } catch {}
 
     peerConnectionRef.current = null;
+    pendingIceCandidatesRef.current = [];
 
     localCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
     localCallStreamRef.current = null;
@@ -3192,6 +3242,7 @@ function App() {
         await peerConnectionRef.current?.setRemoteDescription(
           new RTCSessionDescription(payload.answer)
         );
+        await flushPendingIceCandidates();
         setCallState((current) => ({ ...current, status: "active" }));
       } catch (error) {
         console.error("CALL ANSWER ERROR:", error);
@@ -3200,11 +3251,19 @@ function App() {
     }
 
     if (row.signal_type === "ice" && payload.candidate) {
+      const peerConnection = peerConnectionRef.current;
+
+      if (!peerConnection || !peerConnection.remoteDescription) {
+        pendingIceCandidatesRef.current.push(payload.candidate);
+        return;
+      }
+
       try {
-        await peerConnectionRef.current?.addIceCandidate(
+        await peerConnection.addIceCandidate(
           new RTCIceCandidate(payload.candidate)
         );
       } catch (error) {
+        pendingIceCandidatesRef.current.push(payload.candidate);
         console.warn("CALL ICE ERROR:", error);
       }
       return;
