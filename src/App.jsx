@@ -153,6 +153,9 @@ function App() {
   const callLastTapRef = useRef(0);
   const circleLastTapRef = useRef(0);
   const processedCallSignalsRef = useRef(new Set());
+  const activeOutgoingCallIdsRef = useRef(new Set());
+  const activeIncomingCallIdsRef = useRef(new Set());
+  const endedCallIdsRef = useRef(new Set());
   const callListenStartedAtRef = useRef(null);
   const pendingIceCandidatesRef = useRef([]);
 
@@ -496,12 +499,38 @@ function App() {
   }, [selectedChat?.id]);
 
 
+  function isFreshCallSignal(row, maxAgeMs = 28000) {
+    if (!row?.created_at) return false;
+    const createdAtMs = new Date(row.created_at).getTime();
+    if (!Number.isFinite(createdAtMs)) return false;
+    return Date.now() - createdAtMs <= maxAgeMs;
+  }
+
+  async function clearOldCallSignalsForMe(userId) {
+    if (!userId) return;
+
+    const cutoff = new Date(Date.now() - 25000).toISOString();
+
+    try {
+      await supabase
+        .from("call_signals")
+        .delete()
+        .or(`receiver_id.eq.${userId},sender_id.eq.${userId}`)
+        .lt("created_at", cutoff);
+    } catch (error) {
+      console.warn("CLEAR OLD CALL SIGNALS ERROR:", error);
+    }
+  }
+
   useEffect(() => {
     const currentSession = sessionRef.current || session;
 
     if (!currentSession?.user?.id) return;
 
-    callListenStartedAtRef.current = new Date(Date.now() - 45000).toISOString();
+    callListenStartedAtRef.current = new Date(Date.now()).toISOString();
+    processedCallSignalsRef.current = new Set();
+    activeIncomingCallIdsRef.current = new Set();
+    clearOldCallSignalsForMe(currentSession.user.id);
 
     const pollRecentCallSignals = async () => {
       const startedAt = callListenStartedAtRef.current;
@@ -3056,7 +3085,8 @@ function App() {
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    audioElement.srcObject = remoteStream;
+    const audioOnlyStream = new MediaStream(audioTracks);
+    audioElement.srcObject = audioOnlyStream;
     audioElement.autoplay = true;
     audioElement.playsInline = true;
     audioElement.controls = false;
@@ -3307,6 +3337,8 @@ function App() {
       await new Promise((resolve) => setTimeout(resolve, 120));
 
       const callId = crypto.randomUUID();
+      activeOutgoingCallIdsRef.current.add(callId);
+      endedCallIdsRef.current.delete(callId);
       startCallRingSound("ring");
       const localStream = await getLocalCallStream(type, callFacingMode);
 
@@ -3385,6 +3417,7 @@ function App() {
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
 
+      activeIncomingCallIdsRef.current.delete(currentCall.callId);
       setCallState((current) => ({
         ...current,
         status: "active",
@@ -3392,8 +3425,9 @@ function App() {
 
       attachCallStreams();
       startRemoteAudioRetry();
-      setTimeout(() => forcePlayRemoteAudio(), 250);
-      setTimeout(() => forcePlayRemoteAudio(), 1200);
+      setTimeout(() => forcePlayRemoteAudio(), 120);
+      setTimeout(() => forcePlayRemoteAudio(), 650);
+      setTimeout(() => forcePlayRemoteAudio(), 1600);
 
       await sendCallSignal({
         type: "answer",
@@ -3415,6 +3449,7 @@ function App() {
     playCallSound("missed");
 
     if (currentCall?.peerUser?.id && currentCall?.callId) {
+      endedCallIdsRef.current.add(currentCall.callId);
       await sendCallSignal({
         type: "reject",
         callId: currentCall.callId,
@@ -3439,6 +3474,7 @@ function App() {
     playCallSound("end");
 
     if (currentCall?.peerUser?.id && currentCall?.callId) {
+      endedCallIdsRef.current.add(currentCall.callId);
       await sendCallSignal({
         type: "end",
         callId: currentCall.callId,
@@ -3453,6 +3489,13 @@ function App() {
   }
 
   function cleanupCall(resetRemote = true) {
+    const currentCall = callStateRef.current;
+    if (currentCall?.callId) {
+      endedCallIdsRef.current.add(currentCall.callId);
+      activeIncomingCallIdsRef.current.delete(currentCall.callId);
+      activeOutgoingCallIdsRef.current.delete(currentCall.callId);
+    }
+
     stopCallRingSound();
     stopRemoteAudioRetry();
 
@@ -3630,15 +3673,33 @@ function App() {
   async function handleCallSignal(row) {
     const currentSession = sessionRef.current || session;
     if (!currentSession?.user?.id || !row?.id) return;
+
     if (processedCallSignalsRef.current.has(row.id)) return;
     processedCallSignalsRef.current.add(row.id);
 
     if (row.sender_id === currentSession.user.id) return;
+    if (endedCallIdsRef.current.has(row.call_id)) return;
 
     const payload = row.payload || {};
     const currentCall = callStateRef.current;
 
+    // ВАЖНО: это убирает фантомные звонки после обновления страницы.
+    // При загрузке страницы старые offer из базы больше не открывают входящий звонок.
     if (row.signal_type === "offer") {
+      const startedAt = callListenStartedAtRef.current;
+      const isAfterPageStart = startedAt && new Date(row.created_at).getTime() >= new Date(startedAt).getTime();
+      const isFresh = isFreshCallSignal(row, 22000);
+
+      if (!isAfterPageStart || !isFresh) {
+        endedCallIdsRef.current.add(row.call_id);
+        return;
+      }
+
+      if (callStateRef.current.status !== "idle") return;
+      if (activeIncomingCallIdsRef.current.has(row.call_id)) return;
+
+      activeIncomingCallIdsRef.current.add(row.call_id);
+
       const peerUser =
         payload.caller ||
         getCallPeerFromChat(row.chat_id, row.sender_id);
@@ -3660,11 +3721,22 @@ function App() {
 
     if (row.signal_type === "answer" && payload.answer) {
       try {
+        stopCallRingSound();
+        playCallSound("accept");
+
         await peerConnectionRef.current?.setRemoteDescription(
           new RTCSessionDescription(payload.answer)
         );
+
         await flushPendingIceCandidates();
+
         setCallState((current) => ({ ...current, status: "active" }));
+
+        attachCallStreams();
+        startRemoteAudioRetry();
+        setTimeout(() => forcePlayRemoteAudio(), 120);
+        setTimeout(() => forcePlayRemoteAudio(), 650);
+        setTimeout(() => forcePlayRemoteAudio(), 1600);
       } catch (error) {
         console.error("CALL ANSWER ERROR:", error);
       }
@@ -3691,12 +3763,17 @@ function App() {
     }
 
     if (["end", "reject"].includes(row.signal_type)) {
+      endedCallIdsRef.current.add(row.call_id);
+      stopCallRingSound();
+      stopRemoteAudioRetry();
       playCallSound(row.signal_type === "reject" ? "missed" : "end");
+
       if (row.signal_type === "end") {
         await sendCallSystemMessage(row.chat_id, "📞 Звонок завершён");
       } else {
         await sendCallSystemMessage(row.chat_id, "📞 Не удалось дозвониться до пользователя");
       }
+
       cleanupCall(false);
     }
   }
