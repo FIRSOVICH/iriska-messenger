@@ -142,6 +142,7 @@ function App() {
   const remoteCallStreamRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const processedCallSignalsRef = useRef(new Set());
   const callListenStartedAtRef = useRef(null);
   const pendingIceCandidatesRef = useRef([]);
@@ -2927,12 +2928,24 @@ function App() {
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localCallStreamRef.current;
         localVideoRef.current.muted = true;
+        localVideoRef.current.volume = 0;
         localVideoRef.current.play?.().catch(() => {});
       }
 
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteCallStreamRef.current;
+        remoteVideoRef.current.muted = false;
+        remoteVideoRef.current.volume = 1;
         remoteVideoRef.current.play?.().catch(() => {});
+      }
+
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteCallStreamRef.current;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1;
+        remoteAudioRef.current.play?.().catch((error) => {
+          console.warn("REMOTE AUDIO PLAY BLOCKED:", error);
+        });
       }
     }, 80);
   }
@@ -2965,9 +2978,24 @@ function App() {
     remoteCallStreamRef.current = remoteStream;
 
     peerConnection.ontrack = (event) => {
-      event.streams?.[0]?.getTracks()?.forEach((track) => {
-        remoteStream.addTrack(track);
-      });
+      const incomingStream = event.streams?.[0];
+
+      if (incomingStream) {
+        incomingStream.getTracks().forEach((track) => {
+          track.enabled = true;
+          const alreadyAdded = remoteStream.getTracks().some((existingTrack) => existingTrack.id === track.id);
+          if (!alreadyAdded) {
+            remoteStream.addTrack(track);
+          }
+        });
+      } else if (event.track) {
+        event.track.enabled = true;
+        const alreadyAdded = remoteStream.getTracks().some((existingTrack) => existingTrack.id === event.track.id);
+        if (!alreadyAdded) {
+          remoteStream.addTrack(event.track);
+        }
+      }
+
       attachCallStreams();
     };
 
@@ -3177,6 +3205,10 @@ function App() {
 
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
+    }
+
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
     }
 
     setIsCallMuted(false);
@@ -4791,6 +4823,8 @@ function App() {
               <p>{callState.peerUser?.username || selectedUser?.username || "Пользователь"}</p>
             </div>
 
+            <audio ref={remoteAudioRef} className="remote-call-audio" autoPlay playsInline />
+
             {callState.type === "video" ? (
               <div className="call-video-grid">
                 <video ref={remoteVideoRef} className="remote-call-video" playsInline autoPlay />
@@ -4810,6 +4844,18 @@ function App() {
                 </span>
               </div>
             )}
+
+            <button
+              type="button"
+              className="call-audio-unlock"
+              onClick={() => {
+                attachCallStreams();
+                remoteAudioRef.current?.play?.().catch(() => {});
+                remoteVideoRef.current?.play?.().catch(() => {});
+              }}
+            >
+              🔊 Включить звук
+            </button>
 
             <div className="call-controls">
               {callState.status === "incoming" ? (
