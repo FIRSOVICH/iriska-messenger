@@ -6373,3 +6373,32 @@ html[data-theme="light"] body,
   50% { content: ".."; }
   75%, 100% { content: "..."; }
 }
+
+
+/* =========================================================
+   IRISKA CALLS FINAL STABLE AUDIO v8
+   ========================================================= */
+
+.remote-call-audio {
+  display: block !important;
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 2px !important;
+  height: 2px !important;
+  opacity: 0.01 !important;
+  pointer-events: none !important;
+}
+
+.call-audio-unlock {
+  animation: iriskaCallAudioNeedTap 1.4s infinite ease-in-out;
+}
+
+@keyframes iriskaCallAudioNeedTap {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(59, 130, 246, 0.42);
+  }
+}

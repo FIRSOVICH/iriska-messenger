@@ -144,12 +144,14 @@ function App() {
   const peerConnectionRef = useRef(null);
   const localCallStreamRef = useRef(null);
   const remoteCallStreamRef = useRef(null);
+  const remoteAudioStreamRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const remoteAudioElementRef = useRef(null);
   const callRingTimerRef = useRef(null);
   const callAudioRetryTimerRef = useRef(null);
+  const callAttemptTokenRef = useRef(0);
   const callLastTapRef = useRef(0);
   const circleLastTapRef = useRef(0);
   const processedCallSignalsRef = useRef(new Set());
@@ -511,9 +513,12 @@ function App() {
 
     if (!currentSession?.user?.id) return;
 
-    callListenStartedAtRef.current = new Date(Date.now()).toISOString();
+    callListenStartedAtRef.current = new Date(Date.now() + 250).toISOString();
     processedCallSignalsRef.current = new Set();
     activeIncomingCallIdsRef.current = new Set();
+
+    clearOldCallSignalsForMe(currentSession.user.id);
+
     const pollRecentCallSignals = async () => {
       const startedAt = callListenStartedAtRef.current;
       if (!startedAt) return;
@@ -524,20 +529,22 @@ function App() {
         .eq("receiver_id", currentSession.user.id)
         .gt("created_at", startedAt)
         .order("created_at", { ascending: true })
-        .limit(80);
+        .limit(50);
 
       if (error) {
         console.warn("CALL SIGNAL POLL ERROR:", error);
         return;
       }
 
-      (data || []).forEach((row) => {
-        handleCallSignal(row);
-      });
+      (data || [])
+        .filter((row) => isFreshCallSignal(row, 18000))
+        .forEach((row) => {
+          handleCallSignal(row);
+        });
     };
 
     const callsChannel = supabase
-      .channel(`call-signals-${currentSession.user.id}`)
+      .channel(`call-signals-${currentSession.user.id}-${Date.now()}`)
       .on(
         "postgres_changes",
         {
@@ -547,15 +554,16 @@ function App() {
           filter: `receiver_id=eq.${currentSession.user.id}`,
         },
         (payload) => {
-          handleCallSignal(payload.new);
+          if (isFreshCallSignal(payload.new, 18000)) {
+            handleCallSignal(payload.new);
+          }
         }
       )
       .subscribe((status) => {
         console.log("CALL REALTIME STATUS:", status);
       });
 
-    pollRecentCallSignals();
-    const callsPollTimer = setInterval(pollRecentCallSignals, 1200);
+    const callsPollTimer = setInterval(pollRecentCallSignals, 900);
 
     return () => {
       clearInterval(callsPollTimer);
@@ -2947,7 +2955,6 @@ function App() {
       };
 
       if (type === "ring") {
-        // "тулу-лу / тулу-лю"
         beep(660, 0.00, 0.10, 0.16, "triangle");
         beep(880, 0.13, 0.10, 0.16, "triangle");
         beep(660, 0.28, 0.10, 0.13, "triangle");
@@ -2957,13 +2964,11 @@ function App() {
         beep(780, 0.18, 0.12, 0.16, "sine");
         beep(1040, 0.36, 0.15, 0.14, "sine");
       } else if (type === "accept") {
-        // "блум-блум"
         beep(392, 0.00, 0.10, 0.17, "triangle");
         beep(523, 0.10, 0.13, 0.18, "triangle");
         beep(392, 0.30, 0.10, 0.15, "triangle");
         beep(659, 0.42, 0.14, 0.17, "triangle");
       } else if (type === "end") {
-        // "фью"
         beep(620, 0.00, 0.08, 0.14, "sawtooth");
         beep(420, 0.10, 0.10, 0.13, "sawtooth");
         beep(240, 0.22, 0.16, 0.10, "sawtooth");
@@ -2982,12 +2987,15 @@ function App() {
   function startCallRingSound(type = "ring") {
     stopCallRingSound();
     playCallSound(type);
+
     callRingTimerRef.current = setInterval(() => {
       const current = callStateRef.current;
+
       if (!["incoming", "outgoing"].includes(current?.status)) {
         stopCallRingSound();
         return;
       }
+
       playCallSound(type);
     }, 1550);
   }
@@ -3006,20 +3014,50 @@ function App() {
     }
   }
 
-  function rebuildRemoteAudioElement() {
-    const oldElement = remoteAudioElementRef.current || remoteAudioRef.current;
-    const parent = oldElement?.parentElement;
+  function isFreshCallSignal(row, maxAgeMs = 18000) {
+    if (!row?.created_at) return false;
 
-    if (oldElement) {
-      try {
-        oldElement.pause?.();
-        oldElement.srcObject = null;
-        oldElement.removeAttribute("src");
-        oldElement.load?.();
-      } catch {}
+    const createdAtMs = new Date(row.created_at).getTime();
+    if (!Number.isFinite(createdAtMs)) return false;
+
+    return Date.now() - createdAtMs <= maxAgeMs;
+  }
+
+  async function clearOldCallSignalsForMe(userId) {
+    if (!userId) return;
+
+    const cutoff = new Date(Date.now() - 20000).toISOString();
+
+    try {
+      await supabase
+        .from("call_signals")
+        .delete()
+        .or(`receiver_id.eq.${userId},sender_id.eq.${userId}`)
+        .lt("created_at", cutoff);
+    } catch (error) {
+      console.warn("CLEAR OLD CALL SIGNALS ERROR:", error);
     }
+  }
 
-    if (!parent) return oldElement || null;
+  function makeFreshAudioElement() {
+    const oldElement = remoteAudioElementRef.current || remoteAudioRef.current;
+
+    if (!oldElement) return null;
+
+    try {
+      oldElement.pause?.();
+      oldElement.srcObject = null;
+      oldElement.removeAttribute("src");
+      oldElement.load?.();
+    } catch {}
+
+    const parent = oldElement.parentElement;
+
+    if (!parent) {
+      remoteAudioElementRef.current = oldElement;
+      remoteAudioRef.current = oldElement;
+      return oldElement;
+    }
 
     const nextElement = document.createElement("audio");
     nextElement.className = "remote-call-audio";
@@ -3029,45 +3067,46 @@ function App() {
     nextElement.muted = false;
     nextElement.volume = 1;
 
-    oldElement.replaceWith(nextElement);
+    parent.replaceChild(nextElement, oldElement);
+
     remoteAudioElementRef.current = nextElement;
     remoteAudioRef.current = nextElement;
 
     return nextElement;
   }
 
-  async function forcePlayRemoteAudio() {
-    const remoteStream = remoteCallStreamRef.current;
-    if (!remoteStream) return false;
+  function getRemoteAudioElement() {
+    return remoteAudioElementRef.current || remoteAudioRef.current || makeFreshAudioElement();
+  }
 
-    const audioTracks = remoteStream.getAudioTracks?.() || [];
-    audioTracks.forEach((track) => {
-      track.enabled = true;
-    });
+  async function forcePlayRemoteAudio() {
+    const audioElement = getRemoteAudioElement();
+
+    if (!audioElement) return false;
+
+    const audioStream = remoteAudioStreamRef.current || remoteCallStreamRef.current;
+    const audioTracks = audioStream?.getAudioTracks?.() || [];
 
     if (!audioTracks.length) {
       console.warn("REMOTE AUDIO: no audio tracks yet");
       return false;
     }
 
-    let audioElement = remoteAudioElementRef.current || remoteAudioRef.current;
+    audioTracks.forEach((track) => {
+      track.enabled = true;
+    });
 
-    if (!audioElement || audioElement.ended) {
-      audioElement = rebuildRemoteAudioElement();
-    }
-
-    if (!audioElement) return false;
+    const audioOnlyStream = new MediaStream(audioTracks);
 
     try {
       audioElement.pause?.();
+      audioElement.srcObject = null;
+      audioElement.removeAttribute("src");
+      audioElement.load?.();
     } catch {}
 
-    audioElement.srcObject = null;
-    audioElement.load?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    const audioOnlyStream = new MediaStream(audioTracks);
     audioElement.srcObject = audioOnlyStream;
     audioElement.autoplay = true;
     audioElement.playsInline = true;
@@ -3089,21 +3128,18 @@ function App() {
     stopRemoteAudioRetry();
 
     let attempts = 0;
+
     callAudioRetryTimerRef.current = setInterval(async () => {
       attempts += 1;
-      const current = callStateRef.current;
 
-      if (!["active", "outgoing", "incoming"].includes(current?.status) || attempts > 45) {
+      const current = callStateRef.current;
+      if (!["active", "outgoing", "incoming"].includes(current?.status) || attempts > 90) {
         stopRemoteAudioRetry();
         return;
       }
 
-      const ok = await forcePlayRemoteAudio();
-      if (ok && current?.status === "active") {
-        // Не выключаем сразу: Safari иногда отваливает audio после пары секунд.
-        if (attempts > 8) stopRemoteAudioRetry();
-      }
-    }, 700);
+      await forcePlayRemoteAudio();
+    }, 500);
   }
 
   async function sendCallSystemMessage(chatId, textValue) {
@@ -3192,7 +3228,6 @@ function App() {
       }
 
       forcePlayRemoteAudio();
-      startRemoteAudioRetry();
     }, 80);
   }
 
@@ -3212,7 +3247,7 @@ function App() {
     }
   }
 
-  function createPeerConnection(callId, chatId, receiverId) {
+  function createPeerConnection(callId, chatId, receiverId, callType = "audio") {
     const peerConnection = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
@@ -3220,39 +3255,39 @@ function App() {
       ],
     });
 
-    const remoteStream = new MediaStream();
-    remoteCallStreamRef.current = remoteStream;
+    const remoteMixedStream = new MediaStream();
+    const remoteAudioStream = new MediaStream();
 
-    try {
-      peerConnection.addTransceiver("audio", { direction: "sendrecv" });
-      if (callStateRef.current?.type === "video") {
-        peerConnection.addTransceiver("video", { direction: "sendrecv" });
-      }
-    } catch {}
+    remoteCallStreamRef.current = remoteMixedStream;
+    remoteAudioStreamRef.current = remoteAudioStream;
 
     peerConnection.ontrack = (event) => {
-      const incomingStream = event.streams?.[0];
+      const tracks = event.streams?.[0]?.getTracks?.()?.length
+        ? event.streams[0].getTracks()
+        : event.track
+          ? [event.track]
+          : [];
 
-      if (incomingStream) {
-        incomingStream.getTracks().forEach((track) => {
-          track.enabled = true;
-          const alreadyAdded = remoteStream.getTracks().some((existingTrack) => existingTrack.id === track.id);
-          if (!alreadyAdded) {
-            remoteStream.addTrack(track);
-          }
-        });
-      } else if (event.track) {
-        event.track.enabled = true;
-        const alreadyAdded = remoteStream.getTracks().some((existingTrack) => existingTrack.id === event.track.id);
-        if (!alreadyAdded) {
-          remoteStream.addTrack(event.track);
+      tracks.forEach((track) => {
+        track.enabled = true;
+
+        if (!remoteMixedStream.getTracks().some((existingTrack) => existingTrack.id === track.id)) {
+          remoteMixedStream.addTrack(track);
         }
-      }
+
+        if (
+          track.kind === "audio" &&
+          !remoteAudioStream.getTracks().some((existingTrack) => existingTrack.id === track.id)
+        ) {
+          remoteAudioStream.addTrack(track);
+        }
+      });
 
       attachCallStreams();
       startRemoteAudioRetry();
-      setTimeout(() => forcePlayRemoteAudio(), 220);
-      setTimeout(() => forcePlayRemoteAudio(), 900);
+      setTimeout(() => forcePlayRemoteAudio(), 120);
+      setTimeout(() => forcePlayRemoteAudio(), 550);
+      setTimeout(() => forcePlayRemoteAudio(), 1300);
     };
 
     peerConnection.onicecandidate = async (event) => {
@@ -3327,13 +3362,28 @@ function App() {
     return true;
   }
 
+  async function cleanupCallSignals(callId) {
+    if (!callId) return;
+
+    try {
+      await supabase.from("call_signals").delete().eq("call_id", callId);
+    } catch (error) {
+      console.warn("CLEANUP CALL SIGNALS ERROR:", error);
+    }
+  }
+
   function hardResetCallEngine() {
     stopCallRingSound();
     stopRemoteAudioRetry();
 
+    callAttemptTokenRef.current += 1;
+
     try {
       peerConnectionRef.current?.getSenders?.()?.forEach((sender) => {
         try { sender.track?.stop?.(); } catch {}
+      });
+      peerConnectionRef.current?.getReceivers?.()?.forEach((receiver) => {
+        try { receiver.track?.stop?.(); } catch {}
       });
       peerConnectionRef.current?.close?.();
     } catch {}
@@ -3349,7 +3399,12 @@ function App() {
     try {
       remoteCallStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
     } catch {}
-    remoteCallStreamRef.current = new MediaStream();
+    remoteCallStreamRef.current = null;
+
+    try {
+      remoteAudioStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+    } catch {}
+    remoteAudioStreamRef.current = null;
 
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
@@ -3359,17 +3414,7 @@ function App() {
       remoteVideoRef.current.srcObject = null;
     }
 
-    const audioElement = remoteAudioElementRef.current || remoteAudioRef.current;
-    if (audioElement) {
-      try {
-        audioElement.pause?.();
-        audioElement.srcObject = null;
-        audioElement.removeAttribute("src");
-        audioElement.load?.();
-      } catch {}
-    }
-
-    rebuildRemoteAudioElement();
+    makeFreshAudioElement();
   }
 
   async function startCall(type = "audio") {
@@ -3386,14 +3431,16 @@ function App() {
 
     try {
       hardResetCallEngine();
-      await new Promise((resolve) => setTimeout(resolve, 160));
+      await clearOldCallSignalsForMe(currentSession.user.id);
+      await new Promise((resolve) => setTimeout(resolve, 180));
 
       const callId = crypto.randomUUID();
+
       activeOutgoingCallIdsRef.current.add(callId);
       endedCallIdsRef.current.delete(callId);
       startCallRingSound("ring");
-      const localStream = await getLocalCallStream(type, callFacingMode);
 
+      const localStream = await getLocalCallStream(type, callFacingMode);
       localCallStreamRef.current = localStream;
 
       setCallState({
@@ -3405,12 +3452,18 @@ function App() {
         offer: null,
       });
 
-      const peerConnection = createPeerConnection(callId, currentChat.id, peerUser.id);
-      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+      const peerConnection = createPeerConnection(callId, currentChat.id, peerUser.id, type);
+      localStream.getTracks().forEach((track) => {
+        peerConnection.addTrack(track, localStream);
+      });
 
       attachCallStreams();
 
-      const offer = await peerConnection.createOffer();
+      const offer = await peerConnection.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: type === "video",
+      });
+
       await peerConnection.setLocalDescription(offer);
 
       const offerSent = await sendCallSignal({
@@ -3431,7 +3484,6 @@ function App() {
 
       if (!offerSent) {
         cleanupCall(false);
-        return;
       }
     } catch (error) {
       console.error("START CALL ERROR:", error);
@@ -3457,22 +3509,27 @@ function App() {
     try {
       stopCallRingSound();
       playCallSound("accept");
-      const localStream = await getLocalCallStream(currentCall.type, callFacingMode);
 
+      const localStream = await getLocalCallStream(currentCall.type, callFacingMode);
       localCallStreamRef.current = localStream;
 
       const peerConnection = createPeerConnection(
         currentCall.callId,
         currentCall.chatId,
-        currentCall.peerUser.id
+        currentCall.peerUser.id,
+        currentCall.type
       );
 
-      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+      localStream.getTracks().forEach((track) => {
+        peerConnection.addTrack(track, localStream);
+      });
 
       await peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.offer));
-      await flushPendingIceCandidates();
+
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
+
+      await flushPendingIceCandidates();
 
       activeIncomingCallIdsRef.current.delete(currentCall.callId);
       setCallState((current) => ({
@@ -3496,7 +3553,6 @@ function App() {
 
       if (!answerSent) {
         cleanupCall(false);
-        return;
       }
     } catch (error) {
       console.error("ACCEPT CALL ERROR:", error);
@@ -3512,12 +3568,15 @@ function App() {
 
     if (currentCall?.peerUser?.id && currentCall?.callId) {
       endedCallIdsRef.current.add(currentCall.callId);
+
       await sendCallSignal({
         type: "reject",
         callId: currentCall.callId,
         chatId: currentCall.chatId,
         receiverId: currentCall.peerUser.id,
       });
+
+      await cleanupCallSignals(currentCall.callId);
 
       await sendCallSystemMessage(
         currentCall.chatId,
@@ -3537,6 +3596,7 @@ function App() {
 
     if (currentCall?.peerUser?.id && currentCall?.callId) {
       endedCallIdsRef.current.add(currentCall.callId);
+
       await sendCallSignal({
         type: "end",
         callId: currentCall.callId,
@@ -3544,6 +3604,7 @@ function App() {
         receiverId: currentCall.peerUser.id,
       });
 
+      await cleanupCallSignals(currentCall.callId);
       await sendCallSystemMessage(currentCall.chatId, "📞 Звонок завершён");
     }
 
@@ -3552,57 +3613,14 @@ function App() {
 
   function cleanupCall(resetRemote = true) {
     const currentCall = callStateRef.current;
+
     if (currentCall?.callId) {
       endedCallIdsRef.current.add(currentCall.callId);
       activeIncomingCallIdsRef.current.delete(currentCall.callId);
       activeOutgoingCallIdsRef.current.delete(currentCall.callId);
     }
 
-    stopCallRingSound();
-    stopRemoteAudioRetry();
-
-    try {
-      peerConnectionRef.current?.getSenders?.()?.forEach((sender) => {
-        try {
-          sender.track?.stop?.();
-        } catch {}
-      });
-    } catch {}
-
-    try {
-      peerConnectionRef.current?.close?.();
-    } catch {}
-
-    peerConnectionRef.current = null;
-    pendingIceCandidatesRef.current = [];
-
-    localCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
-    localCallStreamRef.current = null;
-
-    if (resetRemote) {
-      remoteCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
-    }
-
-    remoteCallStreamRef.current = null;
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-
-    if (remoteAudioRef.current) {
-      try {
-        remoteAudioRef.current.pause?.();
-        remoteAudioRef.current.srcObject = null;
-        remoteAudioRef.current.removeAttribute("src");
-        remoteAudioRef.current.load?.();
-      } catch {}
-    }
-
-    remoteAudioElementRef.current = null;
+    hardResetCallEngine();
 
     setIsCallMuted(false);
     setIsCallCameraOff(false);
@@ -3633,7 +3651,6 @@ function App() {
     });
     setIsCallCameraOff(nextOff);
   }
-
 
   async function replaceCallVideoTrack(nextFacingMode) {
     const currentCall = callStateRef.current;
@@ -3745,15 +3762,16 @@ function App() {
     const payload = row.payload || {};
     const currentCall = callStateRef.current;
 
-    // ВАЖНО: это убирает фантомные звонки после обновления страницы.
-    // При загрузке страницы старые offer из базы больше не открывают входящий звонок.
     if (row.signal_type === "offer") {
       const startedAt = callListenStartedAtRef.current;
-      const isAfterPageStart = startedAt && new Date(row.created_at).getTime() >= new Date(startedAt).getTime();
-      const isFresh = isFreshCallSignal(row, 22000);
+      const rowCreatedAt = new Date(row.created_at).getTime();
+      const startedAtMs = startedAt ? new Date(startedAt).getTime() : Date.now();
+      const isAfterPageStart = rowCreatedAt >= startedAtMs;
+      const isFresh = isFreshCallSignal(row, 18000);
 
       if (!isAfterPageStart || !isFresh) {
         endedCallIdsRef.current.add(row.call_id);
+        cleanupCallSignals(row.call_id);
         return;
       }
 
@@ -3836,6 +3854,7 @@ function App() {
         await sendCallSystemMessage(row.chat_id, "📞 Не удалось дозвониться до пользователя");
       }
 
+      await cleanupCallSignals(row.call_id);
       cleanupCall(false);
     }
   }
