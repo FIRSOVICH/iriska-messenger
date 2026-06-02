@@ -3060,7 +3060,10 @@ function App() {
     });
 
     try {
-      audioElement.srcObject = remoteStream;
+      if (audioElement.srcObject !== remoteStream) {
+        audioElement.srcObject = remoteStream;
+      }
+
       audioElement.autoplay = true;
       audioElement.playsInline = true;
       audioElement.muted = false;
@@ -3164,52 +3167,63 @@ function App() {
 
   function isMobileWebRtcDevice() {
     const userAgent = navigator.userAgent || "";
-    return /iPhone|iPad|iPod|Android/i.test(userAgent);
+    const isTouch = navigator.maxTouchPoints && navigator.maxTouchPoints > 1;
+    return /iPhone|iPad|iPod|Android/i.test(userAgent) || isTouch;
+  }
+
+  function getTurnConfigFromEnv() {
+    const turnUrlRaw =
+      import.meta.env?.VITE_TURN_URLS ||
+      import.meta.env?.VITE_TURN_URL ||
+      "";
+
+    const turnUsername =
+      import.meta.env?.VITE_TURN_USERNAME ||
+      "";
+
+    const turnCredential =
+      import.meta.env?.VITE_TURN_CREDENTIAL ||
+      "";
+
+    const urls = turnUrlRaw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (!urls.length || !turnUsername || !turnCredential) {
+      return null;
+    }
+
+    return {
+      urls,
+      username: turnUsername,
+      credential: turnCredential,
+    };
   }
 
   function buildIceServers() {
-    const envTurnUrl = import.meta.env?.VITE_TURN_URL;
-    const envTurnUsername = import.meta.env?.VITE_TURN_USERNAME;
-    const envTurnCredential = import.meta.env?.VITE_TURN_CREDENTIAL;
-
     const servers = [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
       { urls: "stun:stun3.l.google.com:19302" },
-      { urls: "stun:openrelay.metered.ca:80" },
     ];
 
-    if (envTurnUrl && envTurnUsername && envTurnCredential) {
-      servers.push({
-        urls: envTurnUrl.split(",").map((item) => item.trim()).filter(Boolean),
-        username: envTurnUsername,
-        credential: envTurnCredential,
-      });
+    const privateTurn = getTurnConfigFromEnv();
+
+    if (privateTurn) {
+      servers.push(privateTurn);
     } else {
+      // Временный fallback. Для стабильных звонков iPhone↔iPhone нужен СВОЙ TURN в Vercel env.
       servers.push(
         {
-          urls: "turn:openrelay.metered.ca:80",
-          username: "openrelayproject",
-          credential: "openrelayproject",
-        },
-        {
-          urls: "turn:openrelay.metered.ca:443",
-          username: "openrelayproject",
-          credential: "openrelayproject",
-        },
-        {
-          urls: "turn:openrelay.metered.ca:80?transport=tcp",
-          username: "openrelayproject",
-          credential: "openrelayproject",
-        },
-        {
-          urls: "turn:openrelay.metered.ca:443?transport=tcp",
-          username: "openrelayproject",
-          credential: "openrelayproject",
-        },
-        {
-          urls: "turns:openrelay.metered.ca:443",
+          urls: [
+            "turn:openrelay.metered.ca:80",
+            "turn:openrelay.metered.ca:443",
+            "turn:openrelay.metered.ca:80?transport=tcp",
+            "turn:openrelay.metered.ca:443?transport=tcp",
+            "turns:openrelay.metered.ca:443",
+          ],
           username: "openrelayproject",
           credential: "openrelayproject",
         }
@@ -3220,10 +3234,13 @@ function App() {
   }
 
   function getIceTransportPolicy() {
-    // Главный фикс для iPhone Safari ↔ iPhone Safari / Android:
-    // на мобильных браузерах заставляем WebRTC идти через TURN relay,
-    // иначе Safari часто выбирает кривой direct/STUN route и звук не ходит.
-    return isMobileWebRtcDevice() ? "relay" : "all";
+    // Если есть свой TURN — мобильные гоним строго через relay.
+    // Если своего TURN нет — оставляем all, иначе бесплатный публичный TURN может полностью не соединиться.
+    if (isMobileWebRtcDevice() && getTurnConfigFromEnv()) {
+      return "relay";
+    }
+
+    return "all";
   }
 
   async function tuneAudioSender(peerConnection) {
@@ -3297,7 +3314,7 @@ function App() {
       iceTransportPolicy: getIceTransportPolicy(),
       bundlePolicy: "max-bundle",
       rtcpMuxPolicy: "require",
-      iceCandidatePoolSize: 8,
+      iceCandidatePoolSize: 10,
     });
 
     const remoteStream = new MediaStream();
@@ -3367,6 +3384,14 @@ function App() {
     };
 
     console.log("CALL ICE POLICY:", getIceTransportPolicy(), buildIceServers().map((server) => server.urls));
+    console.log("IRISKA_CALL_DEBUG", {
+      device: navigator.userAgent,
+      mobile: isMobileWebRtcDevice(),
+      icePolicy: getIceTransportPolicy(),
+      hasPrivateTurn: Boolean(getTurnConfigFromEnv()),
+      iceServers: buildIceServers().map((server) => server.urls),
+    });
+
     peerConnectionRef.current = peerConnection;
     return peerConnection;
   }
@@ -3447,10 +3472,10 @@ function App() {
     callAttemptTokenRef.current += 1;
 
     try {
-      peerConnectionRef.current?.ontrack = null;
-      peerConnectionRef.current?.onicecandidate = null;
-      peerConnectionRef.current?.onconnectionstatechange = null;
-      peerConnectionRef.current?.oniceconnectionstatechange = null;
+      if (peerConnectionRef.current) peerConnectionRef.current.ontrack = null;
+      if (peerConnectionRef.current) peerConnectionRef.current.onicecandidate = null;
+      if (peerConnectionRef.current) peerConnectionRef.current.onconnectionstatechange = null;
+      if (peerConnectionRef.current) peerConnectionRef.current.oniceconnectionstatechange = null;
       peerConnectionRef.current?.getSenders?.()?.forEach((sender) => {
         try { sender.track?.stop?.(); } catch {}
       });
