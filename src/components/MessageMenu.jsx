@@ -12,6 +12,7 @@ function MessageMenu({
   setForwardMessage,
   forwardToChat,
   reactToMessage,
+  getMyReaction,
   togglePinMessage,
   startEditMessage,
 }) {
@@ -25,14 +26,16 @@ function MessageMenu({
                 ? "📷 Фото"
                 : actionMessage.message_type === "audio"
                 ? "🎤 Голосовое"
+                : actionMessage.message_type === "circle"
+                ? "🎥 Кружочек"
                 : actionMessage.text || "Сообщение"}
             </div>
 
             <div className="reaction-row">
-              {["❤️", "😂", "🔥", "👍"].map((emoji) => (
+              {["❤️", "😂", "🔥", "👍", "😍", "😢", "👏", "🤯", "💯", "🍬", "🤝", "😈"].map((emoji) => (
                 <button
                   key={emoji}
-                  className="reaction-action"
+                  className={`reaction-action ${getMyReaction?.(actionMessage) === emoji ? "active" : ""}`}
                   onClick={() => reactToMessage(actionMessage, emoji)}
                 >
                   {emoji}

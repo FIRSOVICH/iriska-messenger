@@ -113,6 +113,7 @@ function App() {
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
   const appTouchStartRef = useRef({ x: 0, y: 0 });
+  const lastMessageTapRef = useRef({ id: null, time: 0 });
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -121,6 +122,21 @@ function App() {
   useEffect(() => {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
+
+  useEffect(() => {
+    if (!selectedChat?.id) return;
+    localStorage.setItem("iriska_last_selected_chat_id", selectedChat.id);
+  }, [selectedChat?.id]);
+
+  useEffect(() => {
+    const lastChatId = localStorage.getItem("iriska_last_selected_chat_id");
+    if (!lastChatId || selectedChat?.id || myChats.length === 0) return;
+
+    const restoredChat = myChats.find((chat) => chat.id === lastChatId);
+    if (restoredChat) {
+      openExistingChat(restoredChat);
+    }
+  }, [myChats.length, selectedChat?.id]);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -1905,8 +1921,40 @@ function App() {
       return;
     }
 
-    closeMessageMenu();
     await loadMyChats();
+  }
+
+  function getMyReaction(message) {
+    const currentSession = sessionRef.current || session;
+    if (!message?.reactions || !currentSession?.user?.id) return null;
+    return message.reactions[currentSession.user.id] || null;
+  }
+
+  function handleMessageTap(message) {
+    if (!message || message.pending || message.is_deleted) return;
+
+    const now = Date.now();
+    const previous = lastMessageTapRef.current;
+
+    if (previous.id === message.id && now - previous.time < 330) {
+      clearTimeout(longPressTimerRef.current);
+      openMessageMenu(message);
+      lastMessageTapRef.current = { id: null, time: 0 };
+      return;
+    }
+
+    lastMessageTapRef.current = { id: message.id, time: now };
+  }
+
+  function seekCircle(message, seconds) {
+    if (!message?.id) return;
+
+    const videoElement = document.getElementById(`circle-video-${message.id}`);
+    if (!videoElement) return;
+
+    const duration = Number.isFinite(videoElement.duration) ? videoElement.duration : 0;
+    const nextTime = Math.max(0, Math.min(duration || 9999, videoElement.currentTime + seconds));
+    videoElement.currentTime = nextTime;
   }
 
   async function togglePinMessage(message) {
@@ -2559,6 +2607,8 @@ function App() {
   async function handleCircleQuickPressStart(event) {
     if (!selectedChat) return;
 
+    event.preventDefault?.();
+
     const point = event.touches?.[0] || event;
     const startPoint = { x: point.clientX || 0, y: point.clientY || 0 };
     circleTouchStartRef.current = startPoint;
@@ -2567,9 +2617,7 @@ function App() {
     circleLockedRef.current = false;
 
     clearTimeout(circleHoldTimerRef.current);
-    circleHoldTimerRef.current = setTimeout(async () => {
-      await openCircleRecorder({ autoStart: true });
-    }, 220);
+    await openCircleRecorder({ autoStart: true });
   }
 
   function handleCircleQuickMove(event) {
@@ -2577,6 +2625,8 @@ function App() {
     if (!point) return;
 
     if (!isCircleRecording) return;
+
+    event.preventDefault?.();
 
     let start = circleTouchStartRef.current;
 
@@ -2588,7 +2638,7 @@ function App() {
     const dx = (point.clientX || 0) - start.x;
     const dy = (point.clientY || 0) - start.y;
 
-    if (dy < -46 && !circleLockedRef.current) {
+    if (dy < -34 && !circleLockedRef.current) {
       circleLockedRef.current = true;
       setIsCircleLocked(true);
       setCircleRecordHint("Запись закреплена — можно отпустить");
@@ -2596,7 +2646,7 @@ function App() {
       return;
     }
 
-    if (dx < -48) {
+    if (dx < -34) {
       navigator.vibrate?.([80]);
       cancelCircleRecording();
     }
@@ -2747,7 +2797,6 @@ function App() {
 
     activeCircleVideoRef.current = videoElement;
 
-    videoElement.currentTime = 0;
     videoElement.play().catch((error) => {
       console.error("CIRCLE PLAY ERROR:", error);
     });
@@ -2757,6 +2806,7 @@ function App() {
     videoElement.onended = () => {
       setCirclePlayer({ id: null, playing: false });
       activeCircleVideoRef.current = null;
+      videoElement.currentTime = 0;
     };
   }
 
@@ -3355,6 +3405,7 @@ function App() {
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
               } ${msg.message_type === "image" ? "image-message" : ""} ${highlightedMessageId === msg.id ? "message-highlight" : ""}`}
+              onClick={() => handleMessageTap(msg)}
               onTouchStart={() => handleMessageTouchStart(msg)}
               onTouchEnd={handleMessageTouchEnd}
               onTouchMove={handleMessageTouchEnd}
@@ -3402,43 +3453,40 @@ function App() {
                 </div>
               ) : msg.message_type === "circle" && msg.circle_url ? (
                 <div className={`circle-message circle-filter-${msg.circle_filter || "normal"}`}>
-                  <div className="circle-video-shell">
+                  <div
+                    className={`circle-video-shell ${circlePlayer.id === msg.id && circlePlayer.playing ? "is-playing" : ""}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleCirclePlayback(msg);
+                    }}
+                  >
                     <video
                       id={`circle-video-${msg.id}`}
                       className="circle-chat-video"
                       src={msg.circle_url}
                       playsInline
                       preload="metadata"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleCirclePlayback(msg);
-                      }}
                     />
-                    {msg.circle_mask && msg.circle_mask !== "none" && (
-                      <div className={`circle-chat-mask circle-mask-${msg.circle_mask}`}>
-                        {msg.circle_mask === "glasses"
-                          ? "😎"
-                          : msg.circle_mask === "crown"
-                            ? "👑"
-                            : msg.circle_mask === "fire"
-                              ? "🔥"
-                              : msg.circle_mask === "demon"
-                                ? "😈"
-                                : msg.circle_mask === "bunny"
-                                  ? "🐰"
-                                  : ""}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="circle-play-btn"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleCirclePlayback(msg);
-                      }}
-                    >
-                      {circlePlayer.id === msg.id && circlePlayer.playing ? "⏸" : "▶"}
-                    </button>
+                    <div className="circle-seek-controls">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          seekCircle(msg, -5);
+                        }}
+                      >
+                        « 5
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          seekCircle(msg, 5);
+                        }}
+                      >
+                        5 »
+                      </button>
+                    </div>
                   </div>
                   <span className="circle-duration">{formatVoiceTime(msg.circle_duration || 0)}</span>
                 </div>
@@ -3725,6 +3773,7 @@ function App() {
         setForwardMessage={setForwardMessage}
         forwardToChat={forwardToChat}
         reactToMessage={reactToMessage}
+        getMyReaction={getMyReaction}
         togglePinMessage={togglePinMessage}
         startEditMessage={startEditMessage}
       />

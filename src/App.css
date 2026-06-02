@@ -5558,3 +5558,142 @@ html[data-theme="light"] body,
     min-height: 44px;
   }
 }
+
+
+/* =========================================================
+   IRISKA V4: circle playback, reactions, desktop home
+   ========================================================= */
+
+.circle-play-btn {
+  display: none !important;
+}
+
+.circle-video-shell {
+  cursor: pointer;
+}
+
+.circle-video-shell::after {
+  content: "тап для просмотра";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.62);
+  color: white;
+  font-size: 12px;
+  font-weight: 900;
+  pointer-events: none;
+  opacity: 0;
+  transition: 0.18s ease;
+}
+
+.circle-video-shell:not(.is-playing):hover::after {
+  opacity: 1;
+}
+
+.circle-video-shell.is-playing::after {
+  display: none;
+}
+
+.circle-seek-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 6;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.16s ease;
+}
+
+.circle-video-shell.is-playing .circle-seek-controls,
+.circle-video-shell:hover .circle-seek-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.circle-seek-controls button {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: white;
+  font-size: 12px;
+  font-weight: 900;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.reaction-action.active,
+.reaction-badge.active {
+  background: linear-gradient(135deg, #2563eb, #7c3aed) !important;
+  color: white !important;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.32);
+}
+
+.reaction-row {
+  grid-template-columns: repeat(6, 1fr) !important;
+}
+
+.reaction-action {
+  min-height: 48px;
+}
+
+.chat-home-mode .chat-header {
+  justify-content: flex-start;
+}
+
+.chat-home-mode .messages {
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 28px;
+}
+
+.chat-home-mode .message.bot {
+  align-self: center;
+  max-width: 520px;
+  width: min(520px, 92%);
+  text-align: center;
+}
+
+@media (min-width: 769px) {
+  .sidebar {
+    display: block !important;
+  }
+
+  .chat-home-mode .mobile-home-panel,
+  .chat-home-mode .mobile-home-chat-list {
+    width: min(720px, 92%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .chat-home-mode .mobile-chat-card {
+    max-width: 620px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .back-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 768px) {
+  .circle-seek-controls {
+    opacity: 1;
+    bottom: 10px;
+  }
+
+  .circle-seek-controls button {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+}
