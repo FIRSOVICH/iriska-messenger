@@ -5791,3 +5791,101 @@ html[data-theme="light"] body,
 .profile-upload-btn input {
   display: none !important;
 }
+
+
+/* =========================================================
+   IRISKA FIX: other profile cover + private per-chat wallpaper
+   ========================================================= */
+
+.chat-menu-file-btn {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(30, 41, 59, 0.92);
+  color: white;
+  font: inherit;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-align: center;
+}
+
+.chat-menu-file-btn input {
+  display: none;
+}
+
+.user-profile-card-v2 {
+  overflow: hidden;
+}
+
+.other-profile-cover {
+  width: calc(100% + 32px);
+  min-height: 178px;
+  margin: -16px -16px 18px;
+  border-radius: 28px 28px 22px 22px;
+  background:
+    radial-gradient(circle at 25% 25%, rgba(56, 189, 248, 0.22), transparent 34%),
+    radial-gradient(circle at 80% 30%, rgba(124, 58, 237, 0.25), transparent 36%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.92));
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.other-profile-cover.has-cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.06), rgba(2, 6, 23, 0.24));
+  pointer-events: none;
+}
+
+.other-profile-avatar {
+  position: relative;
+  z-index: 2;
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.45),
+    0 0 0 4px rgba(255, 255, 255, 0.18);
+}
+
+.profile-info-grid {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.profile-info-grid > div {
+  border-radius: 18px;
+  background: rgba(30, 41, 59, 0.78);
+  padding: 12px 14px;
+}
+
+.profile-info-grid span {
+  display: block;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+}
+
+.profile-info-grid p {
+  margin: 0;
+  color: white;
+  font-weight: 800;
+}
+
+@media (max-width: 768px) {
+  .other-profile-cover {
+    min-height: 160px;
+  }
+}

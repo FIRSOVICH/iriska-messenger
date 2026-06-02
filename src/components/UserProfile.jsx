@@ -17,16 +17,22 @@ function UserProfile({
 
   const description = user.description || "Описание пока не добавлено";
   const status = user.status || (isOnline ? "В сети" : "Офлайн");
+  const coverUrl = user.profile_header_image_url || "";
 
   return (
     <div className="user-profile-backdrop" onClick={onClose}>
-      <div className="user-profile-card" onClick={(event) => event.stopPropagation()}>
+      <div className="user-profile-card user-profile-card-v2" onClick={(event) => event.stopPropagation()}>
         <button className="profile-close-btn" onClick={onClose}>
           ×
         </button>
 
-        <div className="profile-big-avatar">
-          {renderAvatar(user)}
+        <div
+          className={`other-profile-cover ${coverUrl ? "has-cover" : ""}`}
+          style={coverUrl ? { backgroundImage: `linear-gradient(rgba(2, 6, 23, 0.08), rgba(2, 6, 23, 0.24)), url(${coverUrl})` } : undefined}
+        >
+          <div className="profile-big-avatar other-profile-avatar">
+            {renderAvatar(user)}
+          </div>
         </div>
 
         <h2>{user.username || "Пользователь"}</h2>
@@ -38,17 +44,17 @@ function UserProfile({
         <div className="profile-info-grid">
           <div>
             <span>Описание</span>
-            <strong>{description}</strong>
+            <p>{description}</p>
           </div>
 
           <div>
             <span>Статус</span>
-            <strong>{status}</strong>
+            <p>{status}</p>
           </div>
 
           <div>
             <span>Дата регистрации</span>
-            <strong>{createdAt}</strong>
+            <p>{createdAt}</p>
           </div>
         </div>
 

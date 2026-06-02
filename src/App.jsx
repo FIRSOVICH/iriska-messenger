@@ -69,6 +69,15 @@ function App() {
   const [profileHeaderPreviewUrl, setProfileHeaderPreviewUrl] = useState("");
   const [chatHeaderImageUrl, setChatHeaderImageUrl] = useState(() => localStorage.getItem("iriska_chat_header_image_url") || "");
   const [chatHeaderPreviewUrl, setChatHeaderPreviewUrl] = useState("");
+  const [privateChatBackgrounds, setPrivateChatBackgrounds] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("iriska_private_chat_backgrounds") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const [privateChatBackgroundPreviewUrl, setPrivateChatBackgroundPreviewUrl] = useState("");
+
   const [newPassword, setNewPassword] = useState("");
 
   const [mode, setMode] = useState("login");
@@ -262,6 +271,10 @@ function App() {
     localStorage.setItem("iriska_profile_header_image_url", profileHeaderImageUrl || "");
     localStorage.setItem("iriska_chat_header_image_url", chatHeaderImageUrl || "");
   }, [profileNickname, profileDescription, profileStatus, profileHeaderImageUrl, chatHeaderImageUrl]);
+
+  useEffect(() => {
+    localStorage.setItem("iriska_private_chat_backgrounds", JSON.stringify(privateChatBackgrounds || {}));
+  }, [privateChatBackgrounds]);
 
   useEffect(() => {
     function updateViewportHeight() {
@@ -1367,12 +1380,11 @@ function App() {
   }
 
   function getActiveChatBackgroundImage() {
-    return (
-      selectedUser?.chat_header_image_url ||
-      profile?.chat_header_image_url ||
-      chatHeaderImageUrl ||
-      ""
-    );
+    if (selectedChat?.id && privateChatBackgrounds?.[selectedChat.id]) {
+      return privateChatBackgrounds[selectedChat.id];
+    }
+
+    return profile?.chat_header_image_url || chatHeaderImageUrl || "";
   }
 
   function getVisibleProfileHeaderImage() {
@@ -1380,7 +1392,7 @@ function App() {
   }
 
   function getVisibleChatHeaderImage() {
-    return chatHeaderPreviewUrl || getActiveChatBackgroundImage();
+    return privateChatBackgroundPreviewUrl || chatHeaderPreviewUrl || getActiveChatBackgroundImage();
   }
 
   function handleMessageTap(message) {
@@ -3008,6 +3020,59 @@ function App() {
     await loadMyChats();
   }
 
+  async function uploadPrivateChatBackgroundImage(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    const currentSession = sessionRef.current || session;
+    const currentChat = selectedChatRef.current || selectedChat;
+
+    if (!file || !currentSession?.user?.id || !currentChat?.id) return;
+
+    const instantPreviewUrl = URL.createObjectURL(file);
+    setPrivateChatBackgroundPreviewUrl(instantPreviewUrl);
+
+    const fileExt = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
+    const filePath = `${currentSession.user.id}/private-chat-${currentChat.id}-${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type || "image/jpeg",
+      });
+
+    if (uploadError) {
+      console.error("PRIVATE CHAT BACKGROUND UPLOAD ERROR:", uploadError);
+      alert(`Ошибка загрузки фона чата: ${uploadError.message || "проверь bucket avatars"}`);
+      setPrivateChatBackgroundPreviewUrl("");
+      return;
+    }
+
+    const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
+    const publicUrl = data.publicUrl;
+
+    setPrivateChatBackgrounds((current) => ({
+      ...(current || {}),
+      [currentChat.id]: publicUrl,
+    }));
+
+    setPrivateChatBackgroundPreviewUrl("");
+  }
+
+  function removePrivateChatBackground() {
+    const currentChat = selectedChatRef.current || selectedChat;
+    if (!currentChat?.id) return;
+
+    setPrivateChatBackgrounds((current) => {
+      const next = { ...(current || {}) };
+      delete next[currentChat.id];
+      return next;
+    });
+    setPrivateChatBackgroundPreviewUrl("");
+  }
+
   async function changeMyPassword() {
     const passwordValue = newPassword.trim();
 
@@ -3760,6 +3825,30 @@ function App() {
             >
               👤 Перейти в профиль
             </button>
+
+            <label className="chat-menu-file-btn">
+              🖼 Поставить свой фон в этом чате
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  uploadPrivateChatBackgroundImage(event);
+                  setIsChatOptionsOpen(false);
+                }}
+              />
+            </label>
+
+            {privateChatBackgrounds?.[selectedChat.id] && (
+              <button
+                type="button"
+                onClick={() => {
+                  removePrivateChatBackground();
+                  setIsChatOptionsOpen(false);
+                }}
+              >
+                🧽 Убрать свой фон этого чата
+              </button>
+            )}
 
             <button
               type="button"
