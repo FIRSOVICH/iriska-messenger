@@ -78,6 +78,17 @@ function App() {
   });
   const [privateChatBackgroundPreviewUrl, setPrivateChatBackgroundPreviewUrl] = useState("");
 
+  const [callState, setCallState] = useState({
+    status: "idle",
+    type: "audio",
+    callId: null,
+    chatId: null,
+    peerUser: null,
+    offer: null,
+  });
+  const [isCallMuted, setIsCallMuted] = useState(false);
+  const [isCallCameraOff, setIsCallCameraOff] = useState(false);
+
   const [newPassword, setNewPassword] = useState("");
 
   const [mode, setMode] = useState("login");
@@ -125,6 +136,13 @@ function App() {
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
   const appTouchStartRef = useRef({ x: 0, y: 0 });
+  const callStateRef = useRef(callState);
+  const peerConnectionRef = useRef(null);
+  const localCallStreamRef = useRef(null);
+  const remoteCallStreamRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const processedCallSignalsRef = useRef(new Set());
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -137,6 +155,10 @@ function App() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -202,6 +224,7 @@ function App() {
     return () => {
       cleanupVoiceMouseListeners();
       cleanupCircleRecorder();
+      cleanupCall(false);
     };
   }, []);
 
@@ -459,6 +482,33 @@ function App() {
 
     return () => clearInterval(interval);
   }, [selectedChat?.id]);
+
+
+  useEffect(() => {
+    const currentSession = sessionRef.current || session;
+
+    if (!currentSession?.user?.id) return;
+
+    const callsChannel = supabase
+      .channel(`call-signals-${currentSession.user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "call_signals",
+          filter: `receiver_id=eq.${currentSession.user.id}`,
+        },
+        (payload) => {
+          handleCallSignal(payload.new);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(callsChannel);
+    };
+  }, [session?.user?.id, myChats.length]);
 
   async function initUser() {
     await createProfileIfMissing();
@@ -2824,6 +2874,347 @@ function App() {
     videoElement.currentTime = nextTime;
   }
 
+
+  function getCallPeerFromChat(chatId, senderId) {
+    const existingChat = myChats.find((chat) => chat.id === chatId);
+    if (existingChat?.otherUser) return existingChat.otherUser;
+
+    if (selectedChatRef.current?.id === chatId && selectedUserRef.current) {
+      return selectedUserRef.current;
+    }
+
+    return {
+      id: senderId,
+      username: "Пользователь",
+      avatar_url: null,
+    };
+  }
+
+  function attachCallStreams() {
+    setTimeout(() => {
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localCallStreamRef.current;
+        localVideoRef.current.muted = true;
+        localVideoRef.current.play?.().catch(() => {});
+      }
+
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteCallStreamRef.current;
+        remoteVideoRef.current.play?.().catch(() => {});
+      }
+    }, 80);
+  }
+
+  function createPeerConnection(callId, chatId, receiverId) {
+    const peerConnection = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+    });
+
+    const remoteStream = new MediaStream();
+    remoteCallStreamRef.current = remoteStream;
+
+    peerConnection.ontrack = (event) => {
+      event.streams?.[0]?.getTracks()?.forEach((track) => {
+        remoteStream.addTrack(track);
+      });
+      attachCallStreams();
+    };
+
+    peerConnection.onicecandidate = async (event) => {
+      if (!event.candidate || !receiverId) return;
+
+      await sendCallSignal({
+        type: "ice",
+        callId,
+        chatId,
+        receiverId,
+        payload: {
+          candidate: event.candidate.toJSON(),
+        },
+      });
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      if (["failed", "disconnected", "closed"].includes(peerConnection.connectionState)) {
+        if (callStateRef.current.status === "active") {
+          cleanupCall(false);
+        }
+      }
+    };
+
+    peerConnectionRef.current = peerConnection;
+    return peerConnection;
+  }
+
+  async function sendCallSignal({ type, callId, chatId, receiverId, payload = {} }) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id || !receiverId) return;
+
+    const { error } = await supabase.from("call_signals").insert({
+      call_id: callId,
+      chat_id: chatId,
+      sender_id: currentSession.user.id,
+      receiver_id: receiverId,
+      signal_type: type,
+      payload,
+    });
+
+    if (error) {
+      console.error("CALL SIGNAL ERROR:", error);
+      alert("Ошибка звонка. Проверь SQL для call_signals.");
+    }
+  }
+
+  async function startCall(type = "audio") {
+    const currentSession = sessionRef.current || session;
+    const currentChat = selectedChatRef.current || selectedChat;
+    const peerUser = selectedUserRef.current || selectedUser;
+
+    if (!currentSession?.user?.id || !currentChat?.id || !peerUser?.id) return;
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("Этот браузер не поддерживает звонки");
+      return;
+    }
+
+    try {
+      const callId = crypto.randomUUID();
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video",
+      });
+
+      localCallStreamRef.current = localStream;
+
+      setCallState({
+        status: "outgoing",
+        type,
+        callId,
+        chatId: currentChat.id,
+        peerUser,
+        offer: null,
+      });
+
+      const peerConnection = createPeerConnection(callId, currentChat.id, peerUser.id);
+      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+
+      attachCallStreams();
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      await sendCallSignal({
+        type: "offer",
+        callId,
+        chatId: currentChat.id,
+        receiverId: peerUser.id,
+        payload: {
+          callType: type,
+          offer,
+          caller: {
+            id: currentSession.user.id,
+            username: profile?.username || currentSession.user.email || "Пользователь",
+            avatar_url: profile?.avatar_url || null,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("START CALL ERROR:", error);
+      alert("Не удалось начать звонок. Проверь разрешение камеры/микрофона.");
+      cleanupCall(false);
+    }
+  }
+
+  async function acceptCall() {
+    const currentSession = sessionRef.current || session;
+    const currentCall = callStateRef.current;
+
+    if (!currentSession?.user?.id || !currentCall?.offer || !currentCall?.peerUser?.id) return;
+
+    try {
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: currentCall.type === "video",
+      });
+
+      localCallStreamRef.current = localStream;
+
+      const peerConnection = createPeerConnection(
+        currentCall.callId,
+        currentCall.chatId,
+        currentCall.peerUser.id
+      );
+
+      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+
+      setCallState((current) => ({
+        ...current,
+        status: "active",
+      }));
+
+      attachCallStreams();
+
+      await sendCallSignal({
+        type: "answer",
+        callId: currentCall.callId,
+        chatId: currentCall.chatId,
+        receiverId: currentCall.peerUser.id,
+        payload: { answer },
+      });
+    } catch (error) {
+      console.error("ACCEPT CALL ERROR:", error);
+      alert("Не удалось принять звонок. Проверь камеру/микрофон.");
+      cleanupCall(true);
+    }
+  }
+
+  async function rejectCall() {
+    const currentCall = callStateRef.current;
+
+    if (currentCall?.peerUser?.id && currentCall?.callId) {
+      await sendCallSignal({
+        type: "reject",
+        callId: currentCall.callId,
+        chatId: currentCall.chatId,
+        receiverId: currentCall.peerUser.id,
+      });
+    }
+
+    cleanupCall(false);
+  }
+
+  async function endCall() {
+    const currentCall = callStateRef.current;
+
+    if (currentCall?.peerUser?.id && currentCall?.callId) {
+      await sendCallSignal({
+        type: "end",
+        callId: currentCall.callId,
+        chatId: currentCall.chatId,
+        receiverId: currentCall.peerUser.id,
+      });
+    }
+
+    cleanupCall(false);
+  }
+
+  function cleanupCall(resetRemote = true) {
+    try {
+      peerConnectionRef.current?.close?.();
+    } catch {}
+
+    peerConnectionRef.current = null;
+
+    localCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
+    localCallStreamRef.current = null;
+
+    if (resetRemote) {
+      remoteCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
+    }
+
+    remoteCallStreamRef.current = null;
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    setIsCallMuted(false);
+    setIsCallCameraOff(false);
+    setCallState({
+      status: "idle",
+      type: "audio",
+      callId: null,
+      chatId: null,
+      peerUser: null,
+      offer: null,
+    });
+  }
+
+  function toggleCallMute() {
+    const nextMuted = !isCallMuted;
+    localCallStreamRef.current?.getAudioTracks()?.forEach((track) => {
+      track.enabled = !nextMuted;
+    });
+    setIsCallMuted(nextMuted);
+  }
+
+  function toggleCallCamera() {
+    const nextOff = !isCallCameraOff;
+    localCallStreamRef.current?.getVideoTracks()?.forEach((track) => {
+      track.enabled = !nextOff;
+    });
+    setIsCallCameraOff(nextOff);
+  }
+
+  async function handleCallSignal(row) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id || !row?.id) return;
+    if (processedCallSignalsRef.current.has(row.id)) return;
+    processedCallSignalsRef.current.add(row.id);
+
+    if (row.sender_id === currentSession.user.id) return;
+
+    const payload = row.payload || {};
+    const currentCall = callStateRef.current;
+
+    if (row.signal_type === "offer") {
+      const peerUser =
+        payload.caller ||
+        getCallPeerFromChat(row.chat_id, row.sender_id);
+
+      setCallState({
+        status: "incoming",
+        type: payload.callType || "audio",
+        callId: row.call_id,
+        chatId: row.chat_id,
+        peerUser,
+        offer: payload.offer,
+      });
+
+      return;
+    }
+
+    if (!currentCall?.callId || currentCall.callId !== row.call_id) return;
+
+    if (row.signal_type === "answer" && payload.answer) {
+      try {
+        await peerConnectionRef.current?.setRemoteDescription(
+          new RTCSessionDescription(payload.answer)
+        );
+        setCallState((current) => ({ ...current, status: "active" }));
+      } catch (error) {
+        console.error("CALL ANSWER ERROR:", error);
+      }
+      return;
+    }
+
+    if (row.signal_type === "ice" && payload.candidate) {
+      try {
+        await peerConnectionRef.current?.addIceCandidate(
+          new RTCIceCandidate(payload.candidate)
+        );
+      } catch (error) {
+        console.warn("CALL ICE ERROR:", error);
+      }
+      return;
+    }
+
+    if (["end", "reject"].includes(row.signal_type)) {
+      cleanupCall(false);
+    }
+  }
+
   async function saveMyProfileSettings() {
     const currentSession = sessionRef.current || session;
 
@@ -3362,14 +3753,34 @@ function App() {
           </button>
 
           {selectedChat ? (
-            <button
-              type="button"
-              className="chat-options-btn"
-              onClick={() => setIsChatOptionsOpen((value) => !value)}
-              aria-label="Меню чата"
-            >
-              ⋮
-            </button>
+            <div className="chat-call-actions">
+              <button
+                type="button"
+                className="chat-call-btn"
+                onClick={() => startCall("audio")}
+                aria-label="Аудиозвонок"
+                title="Аудиозвонок"
+              >
+                📞
+              </button>
+              <button
+                type="button"
+                className="chat-call-btn"
+                onClick={() => startCall("video")}
+                aria-label="Видеозвонок"
+                title="Видеозвонок"
+              >
+                🎥
+              </button>
+              <button
+                type="button"
+                className="chat-options-btn"
+                onClick={() => setIsChatOptionsOpen((value) => !value)}
+                aria-label="Меню чата"
+              >
+                ⋮
+              </button>
+            </div>
           ) : (
             <button
               type="button"
@@ -4294,6 +4705,77 @@ function App() {
                   </button>
                   <button type="button" className="circle-send-btn" onClick={sendCircleMessage}>
                     Отправить
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {callState.status !== "idle" && (
+        <div className="call-backdrop">
+          <div className={`call-modal call-${callState.type}`}>
+            <div className="call-header">
+              <div className="call-peer-avatar">
+                {renderAvatar(callState.peerUser || selectedUser)}
+              </div>
+              <h3>
+                {callState.status === "incoming"
+                  ? "Входящий звонок"
+                  : callState.status === "outgoing"
+                    ? "Звонок..."
+                    : callState.type === "video"
+                      ? "Видеозвонок"
+                      : "Аудиозвонок"}
+              </h3>
+              <p>{callState.peerUser?.username || selectedUser?.username || "Пользователь"}</p>
+            </div>
+
+            {callState.type === "video" ? (
+              <div className="call-video-grid">
+                <video ref={remoteVideoRef} className="remote-call-video" playsInline autoPlay />
+                <video ref={localVideoRef} className="local-call-video" playsInline autoPlay muted />
+              </div>
+            ) : (
+              <div className="audio-call-visual">
+                <div className="audio-pulse">
+                  {renderAvatar(callState.peerUser || selectedUser)}
+                </div>
+                <span>
+                  {callState.status === "active"
+                    ? "Соединение активно"
+                    : callState.status === "incoming"
+                      ? "Звонит тебе"
+                      : "Ожидаем ответа"}
+                </span>
+              </div>
+            )}
+
+            <div className="call-controls">
+              {callState.status === "incoming" ? (
+                <>
+                  <button type="button" className="call-accept" onClick={acceptCall}>
+                    Принять
+                  </button>
+                  <button type="button" className="call-decline" onClick={rejectCall}>
+                    Отклонить
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className={isCallMuted ? "call-muted active" : "call-muted"} onClick={toggleCallMute}>
+                    {isCallMuted ? "Микрофон выкл" : "Микрофон"}
+                  </button>
+
+                  {callState.type === "video" && (
+                    <button type="button" className={isCallCameraOff ? "call-camera active" : "call-camera"} onClick={toggleCallCamera}>
+                      {isCallCameraOff ? "Камера выкл" : "Камера"}
+                    </button>
+                  )}
+
+                  <button type="button" className="call-decline" onClick={endCall}>
+                    Завершить
                   </button>
                 </>
               )}
