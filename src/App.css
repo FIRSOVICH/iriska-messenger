@@ -5640,3 +5640,125 @@ html[data-theme="light"] body,
     font-size: 17px !important;
   }
 }
+
+
+/* =========================================================
+   IRISKA FIX: profile header save, stable chat background, circle seek
+   ========================================================= */
+
+.has-custom-chat-bg {
+  position: relative;
+  background: #020617 !important;
+}
+
+.has-custom-chat-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--custom-chat-bg);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.22;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.has-custom-chat-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(15, 23, 42, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.62), rgba(2, 6, 23, 0.42));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.has-custom-chat-bg > * {
+  position: relative;
+  z-index: 1;
+}
+
+.has-custom-chat-bg .messages::before,
+.has-custom-chat-bg.chat-home-mode::before {
+  display: none !important;
+  content: none !important;
+}
+
+.messages {
+  background: transparent !important;
+}
+
+.circle-play-btn {
+  display: none !important;
+}
+
+.circle-seek-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.16s ease;
+}
+
+.circle-video-shell:hover .circle-seek-controls,
+.circle-video-shell:active .circle-seek-controls,
+.circle-video-shell.playing .circle-seek-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.circle-seek-controls button {
+  min-width: 46px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  color: white;
+  background: rgba(15, 23, 42, 0.74);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-weight: 900;
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.circle-video-shell {
+  cursor: pointer;
+}
+
+.profile-upload-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.profile-upload-btn::after {
+  content: "загрузить";
+  position: absolute;
+  right: 8px;
+  bottom: 5px;
+  opacity: 0.45;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+@media (max-width: 768px) {
+  .circle-seek-controls {
+    opacity: 1;
+    pointer-events: auto;
+    bottom: 14px;
+  }
+
+  .circle-seek-controls button {
+    min-width: 42px;
+    height: 32px;
+    font-size: 12px;
+  }
+}

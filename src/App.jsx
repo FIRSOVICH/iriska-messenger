@@ -1362,6 +1362,15 @@ function App() {
     return message.reactions[currentSession.user.id] || null;
   }
 
+  function getActiveChatBackgroundImage() {
+    return (
+      selectedUser?.chat_header_image_url ||
+      profile?.chat_header_image_url ||
+      chatHeaderImageUrl ||
+      ""
+    );
+  }
+
   function handleMessageTap(message) {
     if (!message || message.pending || message.is_deleted) return;
 
@@ -2782,6 +2791,15 @@ function App() {
     };
   }
 
+  function seekCircleVideo(messageId, seconds) {
+    const videoElement = document.getElementById(`circle-video-${messageId}`);
+    if (!videoElement) return;
+
+    const duration = Number.isFinite(videoElement.duration) ? videoElement.duration : 0;
+    const nextTime = Math.max(0, Math.min(duration || 9999, (videoElement.currentTime || 0) + seconds));
+    videoElement.currentTime = nextTime;
+  }
+
   async function saveMyProfileSettings() {
     const currentSession = sessionRef.current || session;
 
@@ -2917,11 +2935,50 @@ function App() {
     const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
     const publicUrl = data.publicUrl;
 
+    const updatePayload =
+      type === "profile-header"
+        ? { profile_header_image_url: publicUrl, updated_at: new Date().toISOString() }
+        : { chat_header_image_url: publicUrl, updated_at: new Date().toISOString() };
+
     if (type === "profile-header") {
       setProfileHeaderImageUrl(publicUrl);
+      localStorage.setItem("iriska_profile_header_image_url", publicUrl);
     } else {
       setChatHeaderImageUrl(publicUrl);
+      localStorage.setItem("iriska_chat_header_image_url", publicUrl);
     }
+
+    const { data: updatedProfile, error: updateError } = await supabase
+      .from("profiles")
+      .update(updatePayload)
+      .eq("id", currentSession.user.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error("PROFILE BACKGROUND SAVE ERROR:", updateError);
+      alert("Картинка выбрана, но не сохранилась в базе. Выполни SQL для profile_header_image_url/chat_header_image_url.");
+      return;
+    }
+
+    setProfile(updatedProfile);
+    setSearchResults((current) =>
+      current.map((user) => (user.id === updatedProfile.id ? updatedProfile : user))
+    );
+
+    setMyChats((current) =>
+      current.map((chat) =>
+        chat.otherUser?.id === updatedProfile.id
+          ? { ...chat, otherUser: updatedProfile }
+          : chat
+      )
+    );
+
+    if (selectedUserRef.current?.id === updatedProfile.id) {
+      setSelectedUser(updatedProfile);
+    }
+
+    await loadMyChats();
   }
 
   async function changeMyPassword() {
@@ -3164,8 +3221,8 @@ function App() {
       </aside>
 
       <main
-        className={`chat ${!selectedChat ? "chat-home-mode" : ""} ${chatHeaderImageUrl ? "has-custom-chat-bg" : ""}`}
-        style={chatHeaderImageUrl ? { "--custom-chat-bg": `url(${chatHeaderImageUrl})` } : undefined}
+        className={`chat ${!selectedChat ? "chat-home-mode" : ""} ${getActiveChatBackgroundImage() ? "has-custom-chat-bg" : ""}`}
+        style={getActiveChatBackgroundImage() ? { "--custom-chat-bg": `url(${getActiveChatBackgroundImage()})` } : undefined}
       >
         <header className="chat-header">
           <button
@@ -3454,16 +3511,26 @@ function App() {
                                   : ""}
                       </div>
                     )}
-                    <button
-                      type="button"
-                      className="circle-play-btn"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleCirclePlayback(msg);
-                      }}
-                    >
-                      {circlePlayer.id === msg.id && circlePlayer.playing ? "⏸" : "▶"}
-                    </button>
+                    <div className="circle-seek-controls">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          seekCircleVideo(msg.id, -5);
+                        }}
+                      >
+                        « 5
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          seekCircleVideo(msg.id, 5);
+                        }}
+                      >
+                        5 »
+                      </button>
+                    </div>
                   </div>
                   <span className="circle-duration">{formatVoiceTime(msg.circle_duration || 0)}</span>
                   {msg.text && <div className="media-caption circle-caption">{msg.text}</div>}

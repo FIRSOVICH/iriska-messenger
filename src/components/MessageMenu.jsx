@@ -50,9 +50,10 @@ function MessageMenu({
             <button onClick={() => togglePinMessage(actionMessage)}>
               {actionMessage?.is_pinned ? "📌 Открепить" : "📌 Закрепить"}
             </button>
-            {actionMessage.sender_id === session.user.id && (
-              <button onClick={() => startEditMessage(actionMessage)}>✏️ Изменить</button>
-            )}
+            {actionMessage.sender_id === session.user.id &&
+              !["audio", "circle"].includes(actionMessage.message_type) && (
+                <button onClick={() => startEditMessage(actionMessage)}>✏️ Изменить</button>
+              )}
             <button onClick={startForwardFromMenu}>📤 Переслать</button>
             <button onClick={() => deleteMessageForMe(actionMessage.id)}>
               🧹 Удалить у себя
