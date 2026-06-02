@@ -506,22 +506,6 @@ function App() {
     return Date.now() - createdAtMs <= maxAgeMs;
   }
 
-  async function clearOldCallSignalsForMe(userId) {
-    if (!userId) return;
-
-    const cutoff = new Date(Date.now() - 25000).toISOString();
-
-    try {
-      await supabase
-        .from("call_signals")
-        .delete()
-        .or(`receiver_id.eq.${userId},sender_id.eq.${userId}`)
-        .lt("created_at", cutoff);
-    } catch (error) {
-      console.warn("CLEAR OLD CALL SIGNALS ERROR:", error);
-    }
-  }
-
   useEffect(() => {
     const currentSession = sessionRef.current || session;
 
@@ -530,8 +514,6 @@ function App() {
     callListenStartedAtRef.current = new Date(Date.now()).toISOString();
     processedCallSignalsRef.current = new Set();
     activeIncomingCallIdsRef.current = new Set();
-    clearOldCallSignalsForMe(currentSession.user.id);
-
     const pollRecentCallSignals = async () => {
       const startedAt = callListenStartedAtRef.current;
       if (!startedAt) return;
@@ -3241,6 +3223,13 @@ function App() {
     const remoteStream = new MediaStream();
     remoteCallStreamRef.current = remoteStream;
 
+    try {
+      peerConnection.addTransceiver("audio", { direction: "sendrecv" });
+      if (callStateRef.current?.type === "video") {
+        peerConnection.addTransceiver("video", { direction: "sendrecv" });
+      }
+    } catch {}
+
     peerConnection.ontrack = (event) => {
       const incomingStream = event.streams?.[0];
 
@@ -3301,23 +3290,86 @@ function App() {
     return peerConnection;
   }
 
+  function makeSafeCallPayload(payload = {}) {
+    try {
+      return JSON.parse(JSON.stringify(payload || {}));
+    } catch (error) {
+      console.warn("CALL PAYLOAD JSON ERROR:", error);
+      return {};
+    }
+  }
+
   async function sendCallSignal({ type, callId, chatId, receiverId, payload = {} }) {
     const currentSession = sessionRef.current || session;
-    if (!currentSession?.user?.id || !receiverId) return;
+    if (!currentSession?.user?.id || !receiverId || !callId || !chatId) return false;
 
-    const { error } = await supabase.from("call_signals").insert({
+    const row = {
       call_id: callId,
       chat_id: chatId,
       sender_id: currentSession.user.id,
       receiver_id: receiverId,
       signal_type: type,
-      payload,
-    });
+      payload: makeSafeCallPayload(payload),
+    };
+
+    const { error } = await supabase.from("call_signals").insert(row);
 
     if (error) {
-      console.error("CALL SIGNAL ERROR:", error);
-      alert("Ошибка звонка. Проверь SQL для call_signals.");
+      console.error("CALL SIGNAL ERROR:", type, error, row);
+
+      if (["offer", "answer"].includes(type)) {
+        alert(`Ошибка звонка: ${error.message || "call_signals"}. Проверь SQL-политики call_signals.`);
+      }
+
+      return false;
     }
+
+    return true;
+  }
+
+  function hardResetCallEngine() {
+    stopCallRingSound();
+    stopRemoteAudioRetry();
+
+    try {
+      peerConnectionRef.current?.getSenders?.()?.forEach((sender) => {
+        try { sender.track?.stop?.(); } catch {}
+      });
+      peerConnectionRef.current?.close?.();
+    } catch {}
+
+    peerConnectionRef.current = null;
+    pendingIceCandidatesRef.current = [];
+
+    try {
+      localCallStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+    } catch {}
+    localCallStreamRef.current = null;
+
+    try {
+      remoteCallStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+    } catch {}
+    remoteCallStreamRef.current = new MediaStream();
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    const audioElement = remoteAudioElementRef.current || remoteAudioRef.current;
+    if (audioElement) {
+      try {
+        audioElement.pause?.();
+        audioElement.srcObject = null;
+        audioElement.removeAttribute("src");
+        audioElement.load?.();
+      } catch {}
+    }
+
+    rebuildRemoteAudioElement();
   }
 
   async function startCall(type = "audio") {
@@ -3333,8 +3385,8 @@ function App() {
     }
 
     try {
-      cleanupCall(false);
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      hardResetCallEngine();
+      await new Promise((resolve) => setTimeout(resolve, 160));
 
       const callId = crypto.randomUUID();
       activeOutgoingCallIdsRef.current.add(callId);
@@ -3361,7 +3413,7 @@ function App() {
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      await sendCallSignal({
+      const offerSent = await sendCallSignal({
         type: "offer",
         callId,
         chatId: currentChat.id,
@@ -3376,6 +3428,11 @@ function App() {
           },
         },
       });
+
+      if (!offerSent) {
+        cleanupCall(false);
+        return;
+      }
     } catch (error) {
       console.error("START CALL ERROR:", error);
       const reason =
@@ -3429,13 +3486,18 @@ function App() {
       setTimeout(() => forcePlayRemoteAudio(), 650);
       setTimeout(() => forcePlayRemoteAudio(), 1600);
 
-      await sendCallSignal({
+      const answerSent = await sendCallSignal({
         type: "answer",
         callId: currentCall.callId,
         chatId: currentCall.chatId,
         receiverId: currentCall.peerUser.id,
         payload: { answer },
       });
+
+      if (!answerSent) {
+        cleanupCall(false);
+        return;
+      }
     } catch (error) {
       console.error("ACCEPT CALL ERROR:", error);
       alert("Не удалось принять звонок. Проверь камеру/микрофон.");
