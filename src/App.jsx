@@ -66,7 +66,9 @@ function App() {
   const [profileStatus, setProfileStatus] = useState(() => localStorage.getItem("iriska_profile_status") || "В сети");
   const [profileNickname, setProfileNickname] = useState(() => localStorage.getItem("iriska_profile_nickname") || "");
   const [profileHeaderImageUrl, setProfileHeaderImageUrl] = useState(() => localStorage.getItem("iriska_profile_header_image_url") || "");
+  const [profileHeaderPreviewUrl, setProfileHeaderPreviewUrl] = useState("");
   const [chatHeaderImageUrl, setChatHeaderImageUrl] = useState(() => localStorage.getItem("iriska_chat_header_image_url") || "");
+  const [chatHeaderPreviewUrl, setChatHeaderPreviewUrl] = useState("");
   const [newPassword, setNewPassword] = useState("");
 
   const [mode, setMode] = useState("login");
@@ -244,12 +246,14 @@ function App() {
 
     if (profile.profile_header_image_url) {
       setProfileHeaderImageUrl(profile.profile_header_image_url);
+      setProfileHeaderPreviewUrl("");
     }
 
     if (profile.chat_header_image_url) {
       setChatHeaderImageUrl(profile.chat_header_image_url);
+      setChatHeaderPreviewUrl("");
     }
-  }, [profile?.id]);
+  }, [profile?.id, profile?.profile_header_image_url, profile?.chat_header_image_url]);
 
   useEffect(() => {
     localStorage.setItem("iriska_profile_nickname", profileNickname);
@@ -1369,6 +1373,14 @@ function App() {
       chatHeaderImageUrl ||
       ""
     );
+  }
+
+  function getVisibleProfileHeaderImage() {
+    return profileHeaderPreviewUrl || profileHeaderImageUrl || profile?.profile_header_image_url || "";
+  }
+
+  function getVisibleChatHeaderImage() {
+    return chatHeaderPreviewUrl || getActiveChatBackgroundImage();
   }
 
   function handleMessageTap(message) {
@@ -2915,6 +2927,14 @@ function App() {
     const currentSession = sessionRef.current || session;
     if (!file || !currentSession?.user?.id) return;
 
+    const instantPreviewUrl = URL.createObjectURL(file);
+
+    if (type === "profile-header") {
+      setProfileHeaderPreviewUrl(instantPreviewUrl);
+    } else {
+      setChatHeaderPreviewUrl(instantPreviewUrl);
+    }
+
     const fileExt = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
     const filePath = `${currentSession.user.id}/${type}-${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
 
@@ -2929,6 +2949,8 @@ function App() {
     if (uploadError) {
       console.error("PROFILE BACKGROUND UPLOAD ERROR:", uploadError);
       alert(`Ошибка загрузки изображения: ${uploadError.message || "проверь bucket avatars"}`);
+      if (type === "profile-header") setProfileHeaderPreviewUrl("");
+      else setChatHeaderPreviewUrl("");
       return;
     }
 
@@ -2940,14 +2962,6 @@ function App() {
         ? { profile_header_image_url: publicUrl, updated_at: new Date().toISOString() }
         : { chat_header_image_url: publicUrl, updated_at: new Date().toISOString() };
 
-    if (type === "profile-header") {
-      setProfileHeaderImageUrl(publicUrl);
-      localStorage.setItem("iriska_profile_header_image_url", publicUrl);
-    } else {
-      setChatHeaderImageUrl(publicUrl);
-      localStorage.setItem("iriska_chat_header_image_url", publicUrl);
-    }
-
     const { data: updatedProfile, error: updateError } = await supabase
       .from("profiles")
       .update(updatePayload)
@@ -2957,11 +2971,24 @@ function App() {
 
     if (updateError) {
       console.error("PROFILE BACKGROUND SAVE ERROR:", updateError);
-      alert("Картинка выбрана, но не сохранилась в базе. Выполни SQL для profile_header_image_url/chat_header_image_url.");
+      alert("Фото загрузилось, но не сохранилось в профиле. Выполни SQL для profile_header_image_url/chat_header_image_url.");
+      if (type === "profile-header") setProfileHeaderPreviewUrl("");
+      else setChatHeaderPreviewUrl("");
       return;
     }
 
+    if (type === "profile-header") {
+      setProfileHeaderImageUrl(publicUrl);
+      setProfileHeaderPreviewUrl("");
+      localStorage.setItem("iriska_profile_header_image_url", publicUrl);
+    } else {
+      setChatHeaderImageUrl(publicUrl);
+      setChatHeaderPreviewUrl("");
+      localStorage.setItem("iriska_chat_header_image_url", publicUrl);
+    }
+
     setProfile(updatedProfile);
+
     setSearchResults((current) =>
       current.map((user) => (user.id === updatedProfile.id ? updatedProfile : user))
     );
@@ -3221,8 +3248,8 @@ function App() {
       </aside>
 
       <main
-        className={`chat ${!selectedChat ? "chat-home-mode" : ""} ${getActiveChatBackgroundImage() ? "has-custom-chat-bg" : ""}`}
-        style={getActiveChatBackgroundImage() ? { "--custom-chat-bg": `url(${getActiveChatBackgroundImage()})` } : undefined}
+        className={`chat ${!selectedChat ? "chat-home-mode" : ""} ${getVisibleChatHeaderImage() ? "has-custom-chat-bg" : ""}`}
+        style={getVisibleChatHeaderImage() ? { "--custom-chat-bg": `url(${getVisibleChatHeaderImage()})` } : undefined}
       >
         <header className="chat-header">
           <button
@@ -3898,8 +3925,11 @@ function App() {
             </div>
 
             <div
-              className={`my-profile-cover wallpaper-${profileCover} ${profileHeaderImageUrl ? "has-custom-cover" : ""}`}
-              style={profileHeaderImageUrl ? { backgroundImage: `url(${profileHeaderImageUrl})` } : undefined}
+              className={`my-profile-cover wallpaper-${profileCover} ${getVisibleProfileHeaderImage() ? "has-custom-cover" : ""}`}
+              style={getVisibleProfileHeaderImage() ? {
+                "--profile-header-bg": `url(${getVisibleProfileHeaderImage()})`,
+                backgroundImage: `linear-gradient(rgba(2, 6, 23, 0.18), rgba(2, 6, 23, 0.22)), url(${getVisibleProfileHeaderImage()})`,
+              } : undefined}
             >
               <label className="profile-big-avatar editable-avatar">
                 <input type="file" accept="image/*" onChange={uploadAvatar} />
