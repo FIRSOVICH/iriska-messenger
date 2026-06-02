@@ -6451,3 +6451,18 @@ html[data-theme="light"] body,
     box-shadow: 0 0 28px rgba(59, 130, 246, 0.42);
   }
 }
+
+
+/* =========================================================
+   IRISKA CALLS MOBILE TURN RELAY v11
+   ========================================================= */
+
+.call-connection-status p::after {
+  content: "";
+}
+
+.call-modal.call-audio .call-connection-status.connecting p::after {
+  content: " • TURN";
+  color: rgba(147, 197, 253, 0.9);
+  font-weight: 900;
+}

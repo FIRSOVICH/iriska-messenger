@@ -3162,27 +3162,68 @@ function App() {
     };
   }
 
+  function isMobileWebRtcDevice() {
+    const userAgent = navigator.userAgent || "";
+    return /iPhone|iPad|iPod|Android/i.test(userAgent);
+  }
+
   function buildIceServers() {
+    const envTurnUrl = import.meta.env?.VITE_TURN_URL;
+    const envTurnUsername = import.meta.env?.VITE_TURN_USERNAME;
+    const envTurnCredential = import.meta.env?.VITE_TURN_CREDENTIAL;
+
     const servers = [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
       { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:openrelay.metered.ca:80" },
     ];
 
-    const turnUrl = import.meta.env?.VITE_TURN_URL;
-    const turnUsername = import.meta.env?.VITE_TURN_USERNAME;
-    const turnCredential = import.meta.env?.VITE_TURN_CREDENTIAL;
-
-    if (turnUrl && turnUsername && turnCredential) {
+    if (envTurnUrl && envTurnUsername && envTurnCredential) {
       servers.push({
-        urls: turnUrl,
-        username: turnUsername,
-        credential: turnCredential,
+        urls: envTurnUrl.split(",").map((item) => item.trim()).filter(Boolean),
+        username: envTurnUsername,
+        credential: envTurnCredential,
       });
+    } else {
+      servers.push(
+        {
+          urls: "turn:openrelay.metered.ca:80",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+        {
+          urls: "turn:openrelay.metered.ca:443",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+        {
+          urls: "turn:openrelay.metered.ca:80?transport=tcp",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+        {
+          urls: "turn:openrelay.metered.ca:443?transport=tcp",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+        {
+          urls: "turns:openrelay.metered.ca:443",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        }
+      );
     }
 
     return servers;
+  }
+
+  function getIceTransportPolicy() {
+    // Главный фикс для iPhone Safari ↔ iPhone Safari / Android:
+    // на мобильных браузерах заставляем WebRTC идти через TURN relay,
+    // иначе Safari часто выбирает кривой direct/STUN route и звук не ходит.
+    return isMobileWebRtcDevice() ? "relay" : "all";
   }
 
   async function tuneAudioSender(peerConnection) {
@@ -3253,7 +3294,10 @@ function App() {
   function createPeerConnection(callId, chatId, receiverId, callType = "audio") {
     const peerConnection = new RTCPeerConnection({
       iceServers: buildIceServers(),
-      iceCandidatePoolSize: 6,
+      iceTransportPolicy: getIceTransportPolicy(),
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
+      iceCandidatePoolSize: 8,
     });
 
     const remoteStream = new MediaStream();
@@ -3322,6 +3366,7 @@ function App() {
       }
     };
 
+    console.log("CALL ICE POLICY:", getIceTransportPolicy(), buildIceServers().map((server) => server.urls));
     peerConnectionRef.current = peerConnection;
     return peerConnection;
   }
@@ -3333,6 +3378,26 @@ function App() {
       console.warn("CALL PAYLOAD JSON ERROR:", error);
       return {};
     }
+  }
+
+
+  async function waitForIceGatheringComplete(peerConnection, timeoutMs = 1800) {
+    if (!peerConnection || peerConnection.iceGatheringState === "complete") return;
+
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, timeoutMs);
+
+      const checkState = () => {
+        if (peerConnection.iceGatheringState === "complete") {
+          clearTimeout(timeout);
+          peerConnection.removeEventListener("icegatheringstatechange", checkState);
+          resolve();
+        }
+      };
+
+      peerConnection.addEventListener("icegatheringstatechange", checkState);
+      checkState();
+    });
   }
 
   async function sendCallSignal({ type, callId, chatId, receiverId, payload = {} }) {
@@ -3476,6 +3541,7 @@ function App() {
       });
 
       await peerConnection.setLocalDescription(offer);
+      await waitForIceGatheringComplete(peerConnection, isMobileWebRtcDevice() ? 2200 : 900);
 
       const offerSent = await sendCallSignal({
         type: "offer",
@@ -3541,6 +3607,7 @@ function App() {
 
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
+      await waitForIceGatheringComplete(peerConnection, isMobileWebRtcDevice() ? 2200 : 900);
 
       await flushPendingIceCandidates(currentCall.callId);
 
