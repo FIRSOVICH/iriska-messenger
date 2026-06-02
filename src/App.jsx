@@ -514,7 +514,7 @@ function App() {
 
     if (!currentSession?.user?.id) return;
 
-    callListenStartedAtRef.current = new Date(Date.now() + 250).toISOString();
+    callListenStartedAtRef.current = new Date(Date.now() - 1000).toISOString();
     processedCallSignalsRef.current = new Set();
     activeIncomingCallIdsRef.current = new Set();
 
@@ -538,7 +538,7 @@ function App() {
       }
 
       (data || [])
-        .filter((row) => isFreshCallSignal(row, 18000))
+        .filter((row) => isFreshCallSignal(row, 30000))
         .forEach((row) => {
           handleCallSignal(row);
         });
@@ -555,7 +555,7 @@ function App() {
           filter: `receiver_id=eq.${currentSession.user.id}`,
         },
         (payload) => {
-          if (isFreshCallSignal(payload.new, 18000)) {
+          if (isFreshCallSignal(payload.new, 30000)) {
             handleCallSignal(payload.new);
           }
         }
@@ -3015,19 +3015,17 @@ function App() {
     }
   }
 
-  function isFreshCallSignal(row, maxAgeMs = 18000) {
+  function isFreshCallSignal(row, maxAgeMs = 30000) {
     if (!row?.created_at) return false;
-
     const createdAtMs = new Date(row.created_at).getTime();
     if (!Number.isFinite(createdAtMs)) return false;
-
     return Date.now() - createdAtMs <= maxAgeMs;
   }
 
   async function clearOldCallSignalsForMe(userId) {
     if (!userId) return;
 
-    const cutoff = new Date(Date.now() - 20000).toISOString();
+    const cutoff = new Date(Date.now() - 45000).toISOString();
 
     try {
       await supabase
@@ -3040,56 +3038,20 @@ function App() {
     }
   }
 
-  function makeFreshAudioElement() {
-    const oldElement = remoteAudioElementRef.current || remoteAudioRef.current;
-
-    if (!oldElement) return null;
-
-    try {
-      oldElement.pause?.();
-      oldElement.srcObject = null;
-      oldElement.removeAttribute("src");
-      oldElement.load?.();
-    } catch {}
-
-    const parent = oldElement.parentElement;
-
-    if (!parent) {
-      remoteAudioElementRef.current = oldElement;
-      remoteAudioRef.current = oldElement;
-      return oldElement;
-    }
-
-    const nextElement = document.createElement("audio");
-    nextElement.className = "remote-call-audio";
-    nextElement.autoplay = true;
-    nextElement.playsInline = true;
-    nextElement.controls = false;
-    nextElement.muted = false;
-    nextElement.volume = 1;
-
-    parent.replaceChild(nextElement, oldElement);
-
-    remoteAudioElementRef.current = nextElement;
-    remoteAudioRef.current = nextElement;
-
-    return nextElement;
-  }
-
   function getRemoteAudioElement() {
-    return remoteAudioElementRef.current || remoteAudioRef.current || makeFreshAudioElement();
+    return remoteAudioElementRef.current || remoteAudioRef.current;
   }
 
   async function forcePlayRemoteAudio() {
     const audioElement = getRemoteAudioElement();
+    const remoteStream = remoteCallStreamRef.current;
 
-    if (!audioElement) return false;
+    if (!audioElement || !remoteStream) return false;
 
-    const audioStream = remoteAudioStreamRef.current || remoteCallStreamRef.current;
-    const audioTracks = audioStream?.getAudioTracks?.() || [];
+    const audioTracks = remoteStream.getAudioTracks?.() || [];
 
     if (!audioTracks.length) {
-      console.warn("REMOTE AUDIO: no audio tracks yet");
+      console.warn("REMOTE AUDIO: no tracks yet");
       return false;
     }
 
@@ -3097,30 +3059,17 @@ function App() {
       track.enabled = true;
     });
 
-    const audioOnlyStream = new MediaStream(audioTracks);
-
     try {
-      audioElement.pause?.();
-      audioElement.srcObject = null;
-      audioElement.removeAttribute("src");
-      audioElement.load?.();
-    } catch {}
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    audioElement.srcObject = audioOnlyStream;
-    audioElement.autoplay = true;
-    audioElement.playsInline = true;
-    audioElement.controls = false;
-    audioElement.muted = false;
-    audioElement.volume = 1;
-
-    try {
+      audioElement.srcObject = remoteStream;
+      audioElement.autoplay = true;
+      audioElement.playsInline = true;
+      audioElement.muted = false;
+      audioElement.volume = 1;
       await audioElement.play();
       setCallAudioUnlocked(true);
       return true;
     } catch (error) {
-      console.warn("REMOTE AUDIO PLAY BLOCKED:", error);
+      console.warn("REMOTE AUDIO PLAY ERROR:", error);
       return false;
     }
   }
@@ -3129,18 +3078,17 @@ function App() {
     stopRemoteAudioRetry();
 
     let attempts = 0;
-
     callAudioRetryTimerRef.current = setInterval(async () => {
       attempts += 1;
-
       const current = callStateRef.current;
-      if (!["active", "outgoing", "incoming"].includes(current?.status) || attempts > 90) {
+
+      if (!["active", "incoming", "outgoing"].includes(current?.status) || attempts > 80) {
         stopRemoteAudioRetry();
         return;
       }
 
       await forcePlayRemoteAudio();
-    }, 500);
+    }, 650);
   }
 
   async function sendCallSystemMessage(chatId, textValue) {
@@ -3173,9 +3121,7 @@ function App() {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      sampleSize: { ideal: 16 },
+      channelCount: 1,
     };
 
     if (type !== "video") {
@@ -3187,8 +3133,9 @@ function App() {
         audio,
         video: {
           facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 960 },
+          height: { ideal: 540 },
+          frameRate: { ideal: 24, max: 30 },
         },
       });
     } catch (error) {
@@ -3215,63 +3162,12 @@ function App() {
     };
   }
 
-  function attachCallStreams() {
-    setTimeout(() => {
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = localCallStreamRef.current;
-        localVideoRef.current.muted = true;
-        localVideoRef.current.volume = 0;
-        localVideoRef.current.play?.().catch(() => {});
-      }
-
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteCallStreamRef.current;
-        remoteVideoRef.current.muted = false;
-        remoteVideoRef.current.volume = 1;
-        remoteVideoRef.current.play?.().catch(() => {});
-      }
-
-      forcePlayRemoteAudio();
-    }, 80);
-  }
-
-  function queuePendingIceCandidate(callId, candidate) {
-    if (!callId || !candidate) return;
-
-    const queue = pendingIceCandidatesByCallRef.current[callId] || [];
-    queue.push(candidate);
-    pendingIceCandidatesByCallRef.current[callId] = queue;
-  }
-
-  async function flushPendingIceCandidatesForCall(callId) {
-    const peerConnection = peerConnectionRef.current;
-    if (!peerConnection || !callId) return;
-
-    const currentQueue = pendingIceCandidatesByCallRef.current[callId] || [];
-    const legacyQueue = pendingIceCandidatesRef.current || [];
-    const pendingCandidates = [...legacyQueue, ...currentQueue];
-
-    pendingIceCandidatesRef.current = [];
-    pendingIceCandidatesByCallRef.current[callId] = [];
-
-    for (const candidate of pendingCandidates) {
-      try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (error) {
-        console.warn("PENDING CALL ICE ERROR:", error);
-      }
-    }
-  }
-
-  async function flushPendingIceCandidates(callId = callStateRef.current?.callId) {
-    await flushPendingIceCandidatesForCall(callId);
-  }
-
   function buildIceServers() {
     const servers = [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun3.l.google.com:19302" },
     ];
 
     const turnUrl = import.meta.env?.VITE_TURN_URL;
@@ -3299,54 +3195,92 @@ function App() {
 
       const params = audioSender.getParameters();
       params.encodings = params.encodings?.length ? params.encodings : [{}];
-      params.encodings[0].maxBitrate = 64000;
-      params.degradationPreference = "maintain-framerate";
-
+      params.encodings[0].maxBitrate = 48000;
       await audioSender.setParameters(params);
     } catch (error) {
       console.warn("AUDIO SENDER PARAMS ERROR:", error);
     }
   }
 
+  function attachCallStreams() {
+    setTimeout(() => {
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localCallStreamRef.current;
+        localVideoRef.current.muted = true;
+        localVideoRef.current.volume = 0;
+        localVideoRef.current.play?.().catch(() => {});
+      }
+
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteCallStreamRef.current;
+        remoteVideoRef.current.muted = false;
+        remoteVideoRef.current.volume = 1;
+        remoteVideoRef.current.play?.().catch(() => {});
+      }
+
+      forcePlayRemoteAudio();
+    }, 60);
+  }
+
+  function queuePendingIceCandidate(callId, candidate) {
+    if (!callId || !candidate) return;
+
+    const queue = pendingIceCandidatesByCallRef.current[callId] || [];
+    queue.push(candidate);
+    pendingIceCandidatesByCallRef.current[callId] = queue;
+  }
+
+  async function flushPendingIceCandidates(callId = callStateRef.current?.callId) {
+    const peerConnection = peerConnectionRef.current;
+    if (!peerConnection || !callId || !peerConnection.remoteDescription) return;
+
+    const byCallQueue = pendingIceCandidatesByCallRef.current[callId] || [];
+    const legacyQueue = pendingIceCandidatesRef.current || [];
+    const pendingCandidates = [...legacyQueue, ...byCallQueue];
+
+    pendingIceCandidatesRef.current = [];
+    pendingIceCandidatesByCallRef.current[callId] = [];
+
+    for (const candidate of pendingCandidates) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.warn("PENDING ICE ERROR:", error);
+      }
+    }
+  }
+
   function createPeerConnection(callId, chatId, receiverId, callType = "audio") {
     const peerConnection = new RTCPeerConnection({
       iceServers: buildIceServers(),
-      iceCandidatePoolSize: 10,
+      iceCandidatePoolSize: 6,
     });
 
-    const remoteMixedStream = new MediaStream();
-    const remoteAudioStream = new MediaStream();
-
-    remoteCallStreamRef.current = remoteMixedStream;
-    remoteAudioStreamRef.current = remoteAudioStream;
+    const remoteStream = new MediaStream();
+    remoteCallStreamRef.current = remoteStream;
+    remoteAudioStreamRef.current = remoteStream;
 
     peerConnection.ontrack = (event) => {
-      const tracks = event.streams?.[0]?.getTracks?.()?.length
+      const incomingTracks = event.streams?.[0]?.getTracks?.()?.length
         ? event.streams[0].getTracks()
         : event.track
           ? [event.track]
           : [];
 
-      tracks.forEach((track) => {
+      incomingTracks.forEach((track) => {
         track.enabled = true;
 
-        if (!remoteMixedStream.getTracks().some((existingTrack) => existingTrack.id === track.id)) {
-          remoteMixedStream.addTrack(track);
-        }
-
-        if (
-          track.kind === "audio" &&
-          !remoteAudioStream.getTracks().some((existingTrack) => existingTrack.id === track.id)
-        ) {
-          remoteAudioStream.addTrack(track);
+        const exists = remoteStream.getTracks().some((item) => item.id === track.id);
+        if (!exists) {
+          remoteStream.addTrack(track);
         }
       });
 
       attachCallStreams();
       startRemoteAudioRetry();
-      setTimeout(() => forcePlayRemoteAudio(), 120);
-      setTimeout(() => forcePlayRemoteAudio(), 550);
-      setTimeout(() => forcePlayRemoteAudio(), 1300);
+      setTimeout(() => forcePlayRemoteAudio(), 100);
+      setTimeout(() => forcePlayRemoteAudio(), 600);
+      setTimeout(() => forcePlayRemoteAudio(), 1500);
     };
 
     peerConnection.onicecandidate = async (event) => {
@@ -3357,9 +3291,7 @@ function App() {
         callId,
         chatId,
         receiverId,
-        payload: {
-          candidate: event.candidate.toJSON(),
-        },
+        payload: { candidate: event.candidate.toJSON() },
       });
     };
 
@@ -3377,6 +3309,16 @@ function App() {
         if (callStateRef.current.status === "active") {
           cleanupCall(false);
         }
+      }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log("CALL ICE STATE:", peerConnection.iceConnectionState);
+
+      if (["connected", "completed"].includes(peerConnection.iceConnectionState)) {
+        stopCallRingSound();
+        startRemoteAudioRetry();
+        forcePlayRemoteAudio();
       }
     };
 
@@ -3421,14 +3363,16 @@ function App() {
     return true;
   }
 
-  async function cleanupCallSignals(callId) {
+  async function cleanupCallSignals(callId, delayMs = 9000) {
     if (!callId) return;
 
-    try {
-      await supabase.from("call_signals").delete().eq("call_id", callId);
-    } catch (error) {
-      console.warn("CLEANUP CALL SIGNALS ERROR:", error);
-    }
+    setTimeout(async () => {
+      try {
+        await supabase.from("call_signals").delete().eq("call_id", callId);
+      } catch (error) {
+        console.warn("CLEANUP CALL SIGNALS ERROR:", error);
+      }
+    }, delayMs);
   }
 
   function hardResetCallEngine() {
@@ -3438,11 +3382,12 @@ function App() {
     callAttemptTokenRef.current += 1;
 
     try {
+      peerConnectionRef.current?.ontrack = null;
+      peerConnectionRef.current?.onicecandidate = null;
+      peerConnectionRef.current?.onconnectionstatechange = null;
+      peerConnectionRef.current?.oniceconnectionstatechange = null;
       peerConnectionRef.current?.getSenders?.()?.forEach((sender) => {
         try { sender.track?.stop?.(); } catch {}
-      });
-      peerConnectionRef.current?.getReceivers?.()?.forEach((receiver) => {
-        try { receiver.track?.stop?.(); } catch {}
       });
       peerConnectionRef.current?.close?.();
     } catch {}
@@ -3460,10 +3405,6 @@ function App() {
       remoteCallStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
     } catch {}
     remoteCallStreamRef.current = null;
-
-    try {
-      remoteAudioStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
-    } catch {}
     remoteAudioStreamRef.current = null;
 
     if (localVideoRef.current) {
@@ -3474,7 +3415,15 @@ function App() {
       remoteVideoRef.current.srcObject = null;
     }
 
-    makeFreshAudioElement();
+    const audioElement = getRemoteAudioElement();
+    if (audioElement) {
+      try {
+        audioElement.pause?.();
+        audioElement.srcObject = null;
+        audioElement.removeAttribute("src");
+        audioElement.load?.();
+      } catch {}
+    }
   }
 
   async function startCall(type = "audio") {
@@ -3492,12 +3441,12 @@ function App() {
     try {
       hardResetCallEngine();
       await clearOldCallSignalsForMe(currentSession.user.id);
-      await new Promise((resolve) => setTimeout(resolve, 180));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       const callId = crypto.randomUUID();
-
       activeOutgoingCallIdsRef.current.add(callId);
       endedCallIdsRef.current.delete(callId);
+
       startCallRingSound("ring");
 
       const localStream = await getLocalCallStream(type, callFacingMode);
@@ -3513,6 +3462,7 @@ function App() {
       });
 
       const peerConnection = createPeerConnection(callId, currentChat.id, peerUser.id, type);
+
       localStream.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStream);
       });
@@ -3587,6 +3537,7 @@ function App() {
 
       await tuneAudioSender(peerConnection);
       await peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.offer));
+      await flushPendingIceCandidates(currentCall.callId);
 
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
@@ -3601,9 +3552,9 @@ function App() {
 
       attachCallStreams();
       startRemoteAudioRetry();
-      setTimeout(() => forcePlayRemoteAudio(), 120);
-      setTimeout(() => forcePlayRemoteAudio(), 650);
-      setTimeout(() => forcePlayRemoteAudio(), 1600);
+      setTimeout(() => forcePlayRemoteAudio(), 100);
+      setTimeout(() => forcePlayRemoteAudio(), 600);
+      setTimeout(() => forcePlayRemoteAudio(), 1500);
 
       const answerSent = await sendCallSignal({
         type: "answer",
@@ -3638,7 +3589,7 @@ function App() {
         receiverId: currentCall.peerUser.id,
       });
 
-      setTimeout(() => cleanupCallSignals(currentCall.callId), 6000);
+      await cleanupCallSignals(currentCall.callId, 9000);
 
       await sendCallSystemMessage(
         currentCall.chatId,
@@ -3666,7 +3617,7 @@ function App() {
         receiverId: currentCall.peerUser.id,
       });
 
-      setTimeout(() => cleanupCallSignals(currentCall.callId), 6000);
+      await cleanupCallSignals(currentCall.callId, 9000);
       await sendCallSystemMessage(currentCall.chatId, "📞 Звонок завершён");
     }
 
@@ -3722,8 +3673,8 @@ function App() {
       const nextStream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: nextFacingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 960 },
+          height: { ideal: 540 },
         },
         audio: false,
       });
@@ -3829,11 +3780,11 @@ function App() {
       const rowCreatedAt = new Date(row.created_at).getTime();
       const startedAtMs = startedAt ? new Date(startedAt).getTime() : Date.now();
       const isAfterPageStart = rowCreatedAt >= startedAtMs;
-      const isFresh = isFreshCallSignal(row, 18000);
+      const isFresh = isFreshCallSignal(row, 30000);
 
       if (!isAfterPageStart || !isFresh) {
         endedCallIdsRef.current.add(row.call_id);
-        setTimeout(() => cleanupCallSignals(row.call_id), 6000);
+        cleanupCallSignals(row.call_id, 1500);
         return;
       }
 
@@ -3869,9 +3820,7 @@ function App() {
       }
 
       try {
-        await peerConnection.addIceCandidate(
-          new RTCIceCandidate(payload.candidate)
-        );
+        await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
       } catch (error) {
         queuePendingIceCandidate(row.call_id, payload.candidate);
         console.warn("CALL ICE ERROR:", error);
@@ -3896,9 +3845,9 @@ function App() {
 
         attachCallStreams();
         startRemoteAudioRetry();
-        setTimeout(() => forcePlayRemoteAudio(), 120);
-        setTimeout(() => forcePlayRemoteAudio(), 650);
-        setTimeout(() => forcePlayRemoteAudio(), 1600);
+        setTimeout(() => forcePlayRemoteAudio(), 100);
+        setTimeout(() => forcePlayRemoteAudio(), 600);
+        setTimeout(() => forcePlayRemoteAudio(), 1500);
       } catch (error) {
         console.error("CALL ANSWER ERROR:", error);
       }
@@ -3917,7 +3866,7 @@ function App() {
         await sendCallSystemMessage(row.chat_id, "📞 Не удалось дозвониться до пользователя");
       }
 
-      setTimeout(() => cleanupCallSignals(row.call_id), 6000);
+      cleanupCallSignals(row.call_id, 9000);
       cleanupCall(false);
     }
   }
