@@ -36,7 +36,10 @@ function MessageMenu({
                 <button
                   key={emoji}
                   className={`reaction-action ${getMyReaction?.(actionMessage) === emoji ? "active" : ""}`}
-                  onClick={() => reactToMessage(actionMessage, emoji)}
+                  onClick={() => {
+                    reactToMessage(actionMessage, emoji);
+                    closeMessageMenu();
+                  }}
                 >
                   {emoji}
                 </button>
@@ -47,7 +50,7 @@ function MessageMenu({
             <button onClick={() => togglePinMessage(actionMessage)}>
               {actionMessage?.is_pinned ? "📌 Открепить" : "📌 Закрепить"}
             </button>
-            {actionMessage.sender_id === session.user.id && actionMessage.message_type === "text" && (
+            {actionMessage.sender_id === session.user.id && (
               <button onClick={() => startEditMessage(actionMessage)}>✏️ Изменить</button>
             )}
             <button onClick={startForwardFromMenu}>📤 Переслать</button>

@@ -83,6 +83,7 @@ function App() {
   const selectedUserRef = useRef(null);
   const sessionRef = useRef(null);
   const longPressTimerRef = useRef(null);
+  const messageTapRef = useRef({ id: null, time: 0 });
   const chatLongPressTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const voiceChunksRef = useRef([]);
@@ -113,7 +114,6 @@ function App() {
   const blockedUserIdsRef = useRef([]);
   const notificationAudioRef = useRef(null);
   const appTouchStartRef = useRef({ x: 0, y: 0 });
-  const lastMessageTapRef = useRef({ id: null, time: 0 });
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -122,21 +122,6 @@ function App() {
   useEffect(() => {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
-
-  useEffect(() => {
-    if (!selectedChat?.id) return;
-    localStorage.setItem("iriska_last_selected_chat_id", selectedChat.id);
-  }, [selectedChat?.id]);
-
-  useEffect(() => {
-    const lastChatId = localStorage.getItem("iriska_last_selected_chat_id");
-    if (!lastChatId || selectedChat?.id || myChats.length === 0) return;
-
-    const restoredChat = myChats.find((chat) => chat.id === lastChatId);
-    if (restoredChat) {
-      openExistingChat(restoredChat);
-    }
-  }, [myChats.length, selectedChat?.id]);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -1371,6 +1356,28 @@ function App() {
     setActionMessage(null);
   }
 
+  function getMyReaction(message) {
+    const currentSession = sessionRef.current || session;
+    if (!message?.reactions || !currentSession?.user?.id) return null;
+    return message.reactions[currentSession.user.id] || null;
+  }
+
+  function handleMessageTap(message) {
+    if (!message || message.pending || message.is_deleted) return;
+
+    const now = Date.now();
+    const previous = messageTapRef.current;
+
+    if (previous.id === message.id && now - previous.time < 320) {
+      clearTimeout(longPressTimerRef.current);
+      messageTapRef.current = { id: null, time: 0 };
+      openMessageMenu(message);
+      return;
+    }
+
+    messageTapRef.current = { id: message.id, time: now };
+  }
+
   function handleMessageTouchStart(message) {
     clearTimeout(longPressTimerRef.current);
     longPressTimerRef.current = setTimeout(() => {
@@ -1503,17 +1510,16 @@ function App() {
 
   function startEditMessage(message) {
     if (!message || message.sender_id !== session?.user?.id) return;
-    if (message.message_type !== "text") {
-      alert("Редактировать можно только текстовые сообщения");
-      return;
-    }
+
     setEditingMessage(message);
     setText(message.text || "");
     closeMessageMenu();
   }
 
   async function saveEditedMessage() {
-    if (!editingMessage?.id || !text.trim()) return;
+    if (!editingMessage?.id) return;
+
+    if (editingMessage.message_type === "text" && !text.trim()) return;
 
     const nextText = text.trim();
     const editedAt = new Date().toISOString();
@@ -1921,40 +1927,8 @@ function App() {
       return;
     }
 
+    closeMessageMenu();
     await loadMyChats();
-  }
-
-  function getMyReaction(message) {
-    const currentSession = sessionRef.current || session;
-    if (!message?.reactions || !currentSession?.user?.id) return null;
-    return message.reactions[currentSession.user.id] || null;
-  }
-
-  function handleMessageTap(message) {
-    if (!message || message.pending || message.is_deleted) return;
-
-    const now = Date.now();
-    const previous = lastMessageTapRef.current;
-
-    if (previous.id === message.id && now - previous.time < 330) {
-      clearTimeout(longPressTimerRef.current);
-      openMessageMenu(message);
-      lastMessageTapRef.current = { id: null, time: 0 };
-      return;
-    }
-
-    lastMessageTapRef.current = { id: message.id, time: now };
-  }
-
-  function seekCircle(message, seconds) {
-    if (!message?.id) return;
-
-    const videoElement = document.getElementById(`circle-video-${message.id}`);
-    if (!videoElement) return;
-
-    const duration = Number.isFinite(videoElement.duration) ? videoElement.duration : 0;
-    const nextTime = Math.max(0, Math.min(duration || 9999, videoElement.currentTime + seconds));
-    videoElement.currentTime = nextTime;
   }
 
   async function togglePinMessage(message) {
@@ -2607,8 +2581,6 @@ function App() {
   async function handleCircleQuickPressStart(event) {
     if (!selectedChat) return;
 
-    event.preventDefault?.();
-
     const point = event.touches?.[0] || event;
     const startPoint = { x: point.clientX || 0, y: point.clientY || 0 };
     circleTouchStartRef.current = startPoint;
@@ -2617,7 +2589,9 @@ function App() {
     circleLockedRef.current = false;
 
     clearTimeout(circleHoldTimerRef.current);
-    await openCircleRecorder({ autoStart: true });
+    circleHoldTimerRef.current = setTimeout(async () => {
+      await openCircleRecorder({ autoStart: true });
+    }, 220);
   }
 
   function handleCircleQuickMove(event) {
@@ -2625,8 +2599,6 @@ function App() {
     if (!point) return;
 
     if (!isCircleRecording) return;
-
-    event.preventDefault?.();
 
     let start = circleTouchStartRef.current;
 
@@ -2638,7 +2610,7 @@ function App() {
     const dx = (point.clientX || 0) - start.x;
     const dy = (point.clientY || 0) - start.y;
 
-    if (dy < -34 && !circleLockedRef.current) {
+    if (dy < -46 && !circleLockedRef.current) {
       circleLockedRef.current = true;
       setIsCircleLocked(true);
       setCircleRecordHint("Запись закреплена — можно отпустить");
@@ -2646,7 +2618,7 @@ function App() {
       return;
     }
 
-    if (dx < -34) {
+    if (dx < -48) {
       navigator.vibrate?.([80]);
       cancelCircleRecording();
     }
@@ -2797,6 +2769,7 @@ function App() {
 
     activeCircleVideoRef.current = videoElement;
 
+    videoElement.currentTime = 0;
     videoElement.play().catch((error) => {
       console.error("CIRCLE PLAY ERROR:", error);
     });
@@ -2806,7 +2779,6 @@ function App() {
     videoElement.onended = () => {
       setCirclePlayer({ id: null, playing: false });
       activeCircleVideoRef.current = null;
-      videoElement.currentTime = 0;
     };
   }
 
@@ -3405,13 +3377,14 @@ function App() {
               className={`message ${
                 msg.sender_id === session.user.id ? "me" : "bot"
               } ${msg.message_type === "image" ? "image-message" : ""} ${highlightedMessageId === msg.id ? "message-highlight" : ""}`}
-              onClick={() => handleMessageTap(msg)}
               onTouchStart={() => handleMessageTouchStart(msg)}
               onTouchEnd={handleMessageTouchEnd}
               onTouchMove={handleMessageTouchEnd}
               onMouseDown={() => handleMessageTouchStart(msg)}
               onMouseUp={handleMessageTouchEnd}
               onMouseLeave={handleMessageTouchEnd}
+              onClick={() => handleMessageTap(msg)}
+              onDoubleClick={() => openMessageMenu(msg)}
               onContextMenu={(event) => handleMessageContextMenu(event, msg)}
             >
               {msg.reply_to_id && (
@@ -3450,45 +3423,50 @@ function App() {
                     ))}
                   </div>
                   <span className="voice-label">{formatVoiceTime(msg.audio_duration || 0)}</span>
+                  {msg.text && <div className="media-caption">{msg.text}</div>}
                 </div>
               ) : msg.message_type === "circle" && msg.circle_url ? (
                 <div className={`circle-message circle-filter-${msg.circle_filter || "normal"}`}>
-                  <div
-                    className={`circle-video-shell ${circlePlayer.id === msg.id && circlePlayer.playing ? "is-playing" : ""}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleCirclePlayback(msg);
-                    }}
-                  >
+                  <div className="circle-video-shell">
                     <video
                       id={`circle-video-${msg.id}`}
                       className="circle-chat-video"
                       src={msg.circle_url}
                       playsInline
                       preload="metadata"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCirclePlayback(msg);
+                      }}
                     />
-                    <div className="circle-seek-controls">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          seekCircle(msg, -5);
-                        }}
-                      >
-                        « 5
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          seekCircle(msg, 5);
-                        }}
-                      >
-                        5 »
-                      </button>
-                    </div>
+                    {msg.circle_mask && msg.circle_mask !== "none" && (
+                      <div className={`circle-chat-mask circle-mask-${msg.circle_mask}`}>
+                        {msg.circle_mask === "glasses"
+                          ? "😎"
+                          : msg.circle_mask === "crown"
+                            ? "👑"
+                            : msg.circle_mask === "fire"
+                              ? "🔥"
+                              : msg.circle_mask === "demon"
+                                ? "😈"
+                                : msg.circle_mask === "bunny"
+                                  ? "🐰"
+                                  : ""}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="circle-play-btn"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCirclePlayback(msg);
+                      }}
+                    >
+                      {circlePlayer.id === msg.id && circlePlayer.playing ? "⏸" : "▶"}
+                    </button>
                   </div>
                   <span className="circle-duration">{formatVoiceTime(msg.circle_duration || 0)}</span>
+                  {msg.text && <div className="media-caption circle-caption">{msg.text}</div>}
                 </div>
               ) : msg.message_type === "file" && msg.file_url ? (
                 <button
@@ -3500,6 +3478,7 @@ function App() {
                   <span className="file-info">
                     <strong>{msg.file_name || "Файл"}</strong>
                     <small>{formatFileSize(msg.file_size)} · нажми, чтобы скачать</small>
+                    {msg.text && <em className="media-caption file-caption">{msg.text}</em>}
                   </span>
                 </button>
               ) : (
@@ -3512,7 +3491,10 @@ function App() {
               {formatReactionSummary(msg.reactions).length > 0 && (
                 <div className="message-reactions">
                   {formatReactionSummary(msg.reactions).map((reaction) => (
-                    <span key={reaction.emoji} className="reaction-badge">
+                    <span
+                      key={reaction.emoji}
+                      className={`reaction-badge ${getMyReaction(msg) === reaction.emoji ? "active" : ""}`}
+                    >
                       {reaction.emoji} {reaction.count}
                     </span>
                   ))}
@@ -3536,8 +3518,8 @@ function App() {
           {editingMessage && (
             <div className="reply-preview edit-preview">
               <div>
-                <strong>Редактирование сообщения</strong>
-                <p>{editingMessage.text}</p>
+                <strong>Редактирование</strong>
+                <p>{editingMessage.text || getReplyPreview(editingMessage)}</p>
               </div>
 
               <button onClick={() => { setEditingMessage(null); setText(""); }}>×</button>
