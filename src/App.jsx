@@ -498,7 +498,7 @@ function App() {
 
     if (!currentSession?.user?.id) return;
 
-    callListenStartedAtRef.current = new Date(Date.now() - 45000).toISOString();
+    callListenStartedAtRef.current = new Date(Date.now() - 2000).toISOString();
 
     const pollRecentCallSignals = async () => {
       const startedAt = callListenStartedAtRef.current;
@@ -3035,7 +3035,15 @@ function App() {
       track.enabled = true;
     });
 
-    audioElement.srcObject = remoteStream;
+    if (!audioTracks.length) {
+      console.warn("REMOTE AUDIO: no audio tracks yet");
+      return;
+    }
+
+    const audioOnlyStream = new MediaStream(audioTracks);
+
+    audioElement.pause?.();
+    audioElement.srcObject = audioOnlyStream;
     audioElement.autoplay = true;
     audioElement.muted = false;
     audioElement.volume = 1;
@@ -3145,6 +3153,19 @@ function App() {
     return peerConnection;
   }
 
+  async function deleteCallSignals(callId) {
+    if (!callId) return;
+
+    const { error } = await supabase
+      .from("call_signals")
+      .delete()
+      .eq("call_id", callId);
+
+    if (error) {
+      console.warn("DELETE CALL SIGNALS ERROR:", error);
+    }
+  }
+
   async function sendCallSignal({ type, callId, chatId, receiverId, payload = {} }) {
     const currentSession = sessionRef.current || session;
     if (!currentSession?.user?.id || !receiverId) return;
@@ -3175,6 +3196,9 @@ function App() {
       alert("Этот браузер не поддерживает звонки");
       return;
     }
+
+    cleanupCall(true);
+    pendingIceCandidatesRef.current = [];
 
     try {
       const callId = crypto.randomUUID();
@@ -3226,7 +3250,9 @@ function App() {
               ? "Камера/микрофон заняты другой программой или вкладкой."
               : "Проверь разрешение камеры/микрофона.";
       alert(`Не удалось начать звонок. ${reason}`);
-      cleanupCall(false);
+      const endedCallId = row.call_id;
+      cleanupCall(true);
+      setTimeout(() => deleteCallSignals(endedCallId), 1500);
     }
   }
 
@@ -3262,6 +3288,7 @@ function App() {
 
       attachCallStreams();
       setTimeout(() => forcePlayRemoteAudio(), 250);
+      setTimeout(() => forcePlayRemoteAudio(), 900);
 
       await sendCallSignal({
         type: "answer",
@@ -3296,9 +3323,11 @@ function App() {
           ? "📞 Звонок отклонён"
           : "📞 Не удалось дозвониться до пользователя"
       );
+
+      setTimeout(() => deleteCallSignals(currentCall.callId), 1500);
     }
 
-    cleanupCall(false);
+    cleanupCall(true);
   }
 
   async function endCall() {
@@ -3315,9 +3344,10 @@ function App() {
       });
 
       await sendCallSystemMessage(currentCall.chatId, "📞 Звонок завершён");
+      setTimeout(() => deleteCallSignals(currentCall.callId), 1500);
     }
 
-    cleanupCall(false);
+    cleanupCall(true);
   }
 
   function cleanupCall(resetRemote = true) {
@@ -3331,10 +3361,7 @@ function App() {
     localCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
     localCallStreamRef.current = null;
 
-    if (resetRemote) {
-      remoteCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
-    }
-
+    remoteCallStreamRef.current?.getTracks()?.forEach((track) => track.stop());
     remoteCallStreamRef.current = null;
 
     if (localVideoRef.current) {
@@ -3346,7 +3373,10 @@ function App() {
     }
 
     if (remoteAudioRef.current) {
+      remoteAudioRef.current.pause?.();
       remoteAudioRef.current.srcObject = null;
+      remoteAudioRef.current.removeAttribute("src");
+      remoteAudioRef.current.load?.();
     }
 
     setIsCallMuted(false);
@@ -3480,6 +3510,25 @@ function App() {
   async function handleCallSignal(row) {
     const currentSession = sessionRef.current || session;
     if (!currentSession?.user?.id || !row?.id) return;
+
+    const rowCreatedAt = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+    const listenStartedAt = callListenStartedAtRef.current
+      ? new Date(callListenStartedAtRef.current).getTime()
+      : Date.now();
+
+    // После обновления страницы не поднимаем старые offer-сигналы,
+    // иначе появляется "призрачный" входящий звонок из базы.
+    if (row.signal_type === "offer" && rowCreatedAt < listenStartedAt) {
+      processedCallSignalsRef.current.add(row.id);
+      return;
+    }
+
+    // Старые завершения/сбросы тоже не должны оживлять интерфейс.
+    if (["end", "reject"].includes(row.signal_type) && rowCreatedAt < listenStartedAt) {
+      processedCallSignalsRef.current.add(row.id);
+      return;
+    }
+
     if (processedCallSignalsRef.current.has(row.id)) return;
     processedCallSignalsRef.current.add(row.id);
 
@@ -3489,6 +3538,16 @@ function App() {
     const currentCall = callStateRef.current;
 
     if (row.signal_type === "offer") {
+      const offerAgeMs = Date.now() - rowCreatedAt;
+
+      if (offerAgeMs > 30000) {
+        await deleteCallSignals(row.call_id);
+        return;
+      }
+
+      if (currentCall?.status && currentCall.status !== "idle") {
+        return;
+      }
       const peerUser =
         payload.caller ||
         getCallPeerFromChat(row.chat_id, row.sender_id);
@@ -3514,6 +3573,9 @@ function App() {
         );
         await flushPendingIceCandidates();
         setCallState((current) => ({ ...current, status: "active" }));
+        attachCallStreams();
+        setTimeout(() => forcePlayRemoteAudio(), 250);
+        setTimeout(() => forcePlayRemoteAudio(), 900);
       } catch (error) {
         console.error("CALL ANSWER ERROR:", error);
       }
