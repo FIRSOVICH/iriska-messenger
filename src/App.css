@@ -6402,3 +6402,23 @@ html[data-theme="light"] body,
     box-shadow: 0 0 28px rgba(59, 130, 246, 0.42);
   }
 }
+
+
+/* =========================================================
+   IRISKA CALLS ICE AUDIO FIX v9
+   ========================================================= */
+
+.call-connection-status p {
+  line-height: 1.35;
+}
+
+.remote-call-audio {
+  display: block !important;
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 2px !important;
+  height: 2px !important;
+  opacity: 0.01 !important;
+  pointer-events: none !important;
+}

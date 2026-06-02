@@ -160,6 +160,7 @@ function App() {
   const endedCallIdsRef = useRef(new Set());
   const callListenStartedAtRef = useRef(null);
   const pendingIceCandidatesRef = useRef([]);
+  const pendingIceCandidatesByCallRef = useRef({});
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -3172,6 +3173,9 @@ function App() {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
+      sampleSize: { ideal: 16 },
     };
 
     if (type !== "video") {
@@ -3231,12 +3235,24 @@ function App() {
     }, 80);
   }
 
-  async function flushPendingIceCandidates() {
-    const peerConnection = peerConnectionRef.current;
-    if (!peerConnection || pendingIceCandidatesRef.current.length === 0) return;
+  function queuePendingIceCandidate(callId, candidate) {
+    if (!callId || !candidate) return;
 
-    const pendingCandidates = [...pendingIceCandidatesRef.current];
+    const queue = pendingIceCandidatesByCallRef.current[callId] || [];
+    queue.push(candidate);
+    pendingIceCandidatesByCallRef.current[callId] = queue;
+  }
+
+  async function flushPendingIceCandidatesForCall(callId) {
+    const peerConnection = peerConnectionRef.current;
+    if (!peerConnection || !callId) return;
+
+    const currentQueue = pendingIceCandidatesByCallRef.current[callId] || [];
+    const legacyQueue = pendingIceCandidatesRef.current || [];
+    const pendingCandidates = [...legacyQueue, ...currentQueue];
+
     pendingIceCandidatesRef.current = [];
+    pendingIceCandidatesByCallRef.current[callId] = [];
 
     for (const candidate of pendingCandidates) {
       try {
@@ -3247,12 +3263,55 @@ function App() {
     }
   }
 
+  async function flushPendingIceCandidates(callId = callStateRef.current?.callId) {
+    await flushPendingIceCandidatesForCall(callId);
+  }
+
+  function buildIceServers() {
+    const servers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ];
+
+    const turnUrl = import.meta.env?.VITE_TURN_URL;
+    const turnUsername = import.meta.env?.VITE_TURN_USERNAME;
+    const turnCredential = import.meta.env?.VITE_TURN_CREDENTIAL;
+
+    if (turnUrl && turnUsername && turnCredential) {
+      servers.push({
+        urls: turnUrl,
+        username: turnUsername,
+        credential: turnCredential,
+      });
+    }
+
+    return servers;
+  }
+
+  async function tuneAudioSender(peerConnection) {
+    try {
+      const audioSender = peerConnection
+        ?.getSenders()
+        ?.find((sender) => sender.track?.kind === "audio");
+
+      if (!audioSender?.getParameters || !audioSender?.setParameters) return;
+
+      const params = audioSender.getParameters();
+      params.encodings = params.encodings?.length ? params.encodings : [{}];
+      params.encodings[0].maxBitrate = 64000;
+      params.degradationPreference = "maintain-framerate";
+
+      await audioSender.setParameters(params);
+    } catch (error) {
+      console.warn("AUDIO SENDER PARAMS ERROR:", error);
+    }
+  }
+
   function createPeerConnection(callId, chatId, receiverId, callType = "audio") {
     const peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
+      iceServers: buildIceServers(),
+      iceCandidatePoolSize: 10,
     });
 
     const remoteMixedStream = new MediaStream();
@@ -3390,6 +3449,7 @@ function App() {
 
     peerConnectionRef.current = null;
     pendingIceCandidatesRef.current = [];
+    pendingIceCandidatesByCallRef.current = {};
 
     try {
       localCallStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
@@ -3457,6 +3517,7 @@ function App() {
         peerConnection.addTrack(track, localStream);
       });
 
+      await tuneAudioSender(peerConnection);
       attachCallStreams();
 
       const offer = await peerConnection.createOffer({
@@ -3524,12 +3585,13 @@ function App() {
         peerConnection.addTrack(track, localStream);
       });
 
+      await tuneAudioSender(peerConnection);
       await peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.offer));
 
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
 
-      await flushPendingIceCandidates();
+      await flushPendingIceCandidates(currentCall.callId);
 
       activeIncomingCallIdsRef.current.delete(currentCall.callId);
       setCallState((current) => ({
@@ -3576,7 +3638,7 @@ function App() {
         receiverId: currentCall.peerUser.id,
       });
 
-      await cleanupCallSignals(currentCall.callId);
+      setTimeout(() => cleanupCallSignals(currentCall.callId), 6000);
 
       await sendCallSystemMessage(
         currentCall.chatId,
@@ -3604,7 +3666,7 @@ function App() {
         receiverId: currentCall.peerUser.id,
       });
 
-      await cleanupCallSignals(currentCall.callId);
+      setTimeout(() => cleanupCallSignals(currentCall.callId), 6000);
       await sendCallSystemMessage(currentCall.chatId, "📞 Звонок завершён");
     }
 
@@ -3771,7 +3833,7 @@ function App() {
 
       if (!isAfterPageStart || !isFresh) {
         endedCallIdsRef.current.add(row.call_id);
-        cleanupCallSignals(row.call_id);
+        setTimeout(() => cleanupCallSignals(row.call_id), 6000);
         return;
       }
 
@@ -3797,6 +3859,26 @@ function App() {
       return;
     }
 
+    if (row.signal_type === "ice" && payload.candidate) {
+      const peerConnection = peerConnectionRef.current;
+      const isCurrentCall = currentCall?.callId && currentCall.callId === row.call_id;
+
+      if (!isCurrentCall || !peerConnection || !peerConnection.remoteDescription) {
+        queuePendingIceCandidate(row.call_id, payload.candidate);
+        return;
+      }
+
+      try {
+        await peerConnection.addIceCandidate(
+          new RTCIceCandidate(payload.candidate)
+        );
+      } catch (error) {
+        queuePendingIceCandidate(row.call_id, payload.candidate);
+        console.warn("CALL ICE ERROR:", error);
+      }
+      return;
+    }
+
     if (!currentCall?.callId || currentCall.callId !== row.call_id) return;
 
     if (row.signal_type === "answer" && payload.answer) {
@@ -3808,7 +3890,7 @@ function App() {
           new RTCSessionDescription(payload.answer)
         );
 
-        await flushPendingIceCandidates();
+        await flushPendingIceCandidates(currentCall.callId);
 
         setCallState((current) => ({ ...current, status: "active" }));
 
@@ -3819,25 +3901,6 @@ function App() {
         setTimeout(() => forcePlayRemoteAudio(), 1600);
       } catch (error) {
         console.error("CALL ANSWER ERROR:", error);
-      }
-      return;
-    }
-
-    if (row.signal_type === "ice" && payload.candidate) {
-      const peerConnection = peerConnectionRef.current;
-
-      if (!peerConnection || !peerConnection.remoteDescription) {
-        pendingIceCandidatesRef.current.push(payload.candidate);
-        return;
-      }
-
-      try {
-        await peerConnection.addIceCandidate(
-          new RTCIceCandidate(payload.candidate)
-        );
-      } catch (error) {
-        pendingIceCandidatesRef.current.push(payload.candidate);
-        console.warn("CALL ICE ERROR:", error);
       }
       return;
     }
@@ -3854,7 +3917,7 @@ function App() {
         await sendCallSystemMessage(row.chat_id, "📞 Не удалось дозвониться до пользователя");
       }
 
-      await cleanupCallSignals(row.call_id);
+      setTimeout(() => cleanupCallSignals(row.call_id), 6000);
       cleanupCall(false);
     }
   }
