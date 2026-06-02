@@ -6324,3 +6324,32 @@ html[data-theme="light"] body,
 .call-audio-unlock {
   background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
 }
+
+
+/* =========================================================
+   IRISKA CALLS STABLE AUDIO v6
+   ========================================================= */
+
+.remote-call-audio {
+  display: block !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  width: 2px !important;
+  height: 2px !important;
+  opacity: 0.01 !important;
+  pointer-events: none !important;
+}
+
+.call-audio-unlock {
+  animation: callSoundButtonPulse 1.6s infinite ease-in-out;
+}
+
+@keyframes callSoundButtonPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(37, 99, 235, 0);
+  }
+  50% {
+    box-shadow: 0 0 26px rgba(37, 99, 235, 0.34);
+  }
+}
