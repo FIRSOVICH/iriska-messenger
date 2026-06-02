@@ -5423,3 +5423,138 @@ html[data-theme="light"] body,
     padding: 6px 8px;
   }
 }
+
+
+/* =========================================================
+   IRISKA HOTFIX: circles gestures/profile background/password
+   ========================================================= */
+
+.blocked-users-button {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  gap: 8px !important;
+}
+
+.has-custom-chat-bg .messages::before,
+.has-custom-chat-bg.chat-home-mode::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--custom-chat-bg);
+  background-size: cover;
+  background-position: center;
+  opacity: 0.20;
+  filter: blur(0.2px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chat {
+  isolation: isolate;
+}
+
+.messages,
+.chat-home {
+  position: relative;
+  z-index: 1;
+}
+
+.has-custom-cover {
+  background-size: cover !important;
+  background-position: center !important;
+}
+
+.profile-upload-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+
+.profile-upload-btn {
+  min-height: 48px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.92);
+  color: white;
+  font-size: 13px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 10px;
+  text-align: center;
+}
+
+.profile-upload-btn input {
+  display: none;
+}
+
+.password-change-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.password-change-row button {
+  border: 0;
+  border-radius: 16px;
+  padding: 0 14px;
+  color: white;
+  font-weight: 900;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  cursor: pointer;
+}
+
+.circle-recorder-backdrop {
+  touch-action: none;
+}
+
+.telegram-circle-modal {
+  touch-action: none;
+}
+
+.circle-recorder-header {
+  text-align: center;
+}
+
+.circle-recorder-header > div {
+  flex: 1;
+}
+
+.circle-stop-btn {
+  background: linear-gradient(135deg, #2563eb, #7c3aed) !important;
+}
+
+.circle-redo-btn {
+  background: rgba(239, 68, 68, 0.82) !important;
+}
+
+.telegram-circle-actions {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+}
+
+.telegram-circle-actions .circle-record-btn {
+  grid-column: 1 / -1;
+}
+
+.circle-preview-video {
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .profile-upload-row {
+    grid-template-columns: 1fr;
+  }
+
+  .password-change-row {
+    grid-template-columns: 1fr;
+  }
+
+  .password-change-row button {
+    min-height: 44px;
+  }
+}

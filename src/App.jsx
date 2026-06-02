@@ -65,6 +65,9 @@ function App() {
   const [profileDescription, setProfileDescription] = useState(() => localStorage.getItem("iriska_profile_description") || "");
   const [profileStatus, setProfileStatus] = useState(() => localStorage.getItem("iriska_profile_status") || "В сети");
   const [profileNickname, setProfileNickname] = useState(() => localStorage.getItem("iriska_profile_nickname") || "");
+  const [profileHeaderImageUrl, setProfileHeaderImageUrl] = useState(() => localStorage.getItem("iriska_profile_header_image_url") || "");
+  const [chatHeaderImageUrl, setChatHeaderImageUrl] = useState(() => localStorage.getItem("iriska_chat_header_image_url") || "");
+  const [newPassword, setNewPassword] = useState("");
 
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -237,13 +240,23 @@ function App() {
     if (profile.chat_wallpaper) {
       setChatWallpaper(profile.chat_wallpaper);
     }
+
+    if (profile.profile_header_image_url) {
+      setProfileHeaderImageUrl(profile.profile_header_image_url);
+    }
+
+    if (profile.chat_header_image_url) {
+      setChatHeaderImageUrl(profile.chat_header_image_url);
+    }
   }, [profile?.id]);
 
   useEffect(() => {
     localStorage.setItem("iriska_profile_nickname", profileNickname);
     localStorage.setItem("iriska_profile_description", profileDescription);
     localStorage.setItem("iriska_profile_status", profileStatus);
-  }, [profileNickname, profileDescription, profileStatus]);
+    localStorage.setItem("iriska_profile_header_image_url", profileHeaderImageUrl || "");
+    localStorage.setItem("iriska_chat_header_image_url", chatHeaderImageUrl || "");
+  }, [profileNickname, profileDescription, profileStatus, profileHeaderImageUrl, chatHeaderImageUrl]);
 
   useEffect(() => {
     function updateViewportHeight() {
@@ -2494,6 +2507,8 @@ function App() {
 
       circleRecorderRef.current = recorder;
       recorder.start(350);
+      circleTouchStartRef.current = { x: 0, y: 0 };
+      circleMouseStartRef.current = { x: 0, y: 0 };
       setIsCircleRecording(true);
       setIsCircleLocked(false);
       setCircleSeconds(0);
@@ -2545,35 +2560,43 @@ function App() {
     if (!selectedChat) return;
 
     const point = event.touches?.[0] || event;
-    circleTouchStartRef.current = { x: point.clientX || 0, y: point.clientY || 0 };
-    circleMouseStartRef.current = { x: point.clientX || 0, y: point.clientY || 0 };
+    const startPoint = { x: point.clientX || 0, y: point.clientY || 0 };
+    circleTouchStartRef.current = startPoint;
+    circleMouseStartRef.current = startPoint;
     circleCancelRef.current = false;
     circleLockedRef.current = false;
 
     clearTimeout(circleHoldTimerRef.current);
     circleHoldTimerRef.current = setTimeout(async () => {
       await openCircleRecorder({ autoStart: true });
-    }, 260);
+    }, 220);
   }
 
   function handleCircleQuickMove(event) {
-    if (!isCircleRecording) return;
-
     const point = event.touches?.[0] || event;
     if (!point) return;
 
-    const start = circleTouchStartRef.current;
+    if (!isCircleRecording) return;
+
+    let start = circleTouchStartRef.current;
+
+    if (!start?.x && !start?.y) {
+      start = { x: point.clientX || 0, y: point.clientY || 0 };
+      circleTouchStartRef.current = start;
+    }
+
     const dx = (point.clientX || 0) - start.x;
     const dy = (point.clientY || 0) - start.y;
 
-    if (dy < -58 && !circleLockedRef.current) {
+    if (dy < -46 && !circleLockedRef.current) {
       circleLockedRef.current = true;
       setIsCircleLocked(true);
       setCircleRecordHint("Запись закреплена — можно отпустить");
       navigator.vibrate?.([35, 20, 35]);
+      return;
     }
 
-    if (dx < -72) {
+    if (dx < -48) {
       navigator.vibrate?.([80]);
       cancelCircleRecording();
     }
@@ -2590,6 +2613,22 @@ function App() {
 
     stopCircleRecording();
   }
+
+  function handleCircleModalGestureStart(event) {
+    const point = event.touches?.[0] || event;
+    if (!point) return;
+    circleTouchStartRef.current = { x: point.clientX || 0, y: point.clientY || 0 };
+  }
+
+  function handleCircleModalGestureMove(event) {
+    handleCircleQuickMove(event);
+  }
+
+  function handleCircleModalGestureEnd() {
+    // В модальном окне запись не останавливаем отпусканием пальца.
+    // Остановка через кнопку "Стоп", отмена через свайп влево.
+  }
+
 
   async function sendCircleMessage() {
     if (!circleBlob || !selectedChat?.id || !session?.user?.id) return;
@@ -2739,6 +2778,8 @@ function App() {
       status: profileStatus,
       profile_cover: profileCover,
       chat_wallpaper: chatWallpaper,
+      profile_header_image_url: profileHeaderImageUrl || null,
+      chat_header_image_url: chatHeaderImageUrl || null,
       updated_at: new Date().toISOString(),
     };
 
@@ -2777,6 +2818,8 @@ function App() {
     localStorage.setItem("iriska_profile_status", data.status || "В сети");
     localStorage.setItem("iriska_profile_cover", data.profile_cover || profileCover);
     localStorage.setItem("iriska_chat_wallpaper", data.chat_wallpaper || chatWallpaper);
+    localStorage.setItem("iriska_profile_header_image_url", data.profile_header_image_url || profileHeaderImageUrl || "");
+    localStorage.setItem("iriska_chat_header_image_url", data.chat_header_image_url || chatHeaderImageUrl || "");
 
     await loadMyChats();
     alert("Профиль сохранён");
@@ -2823,6 +2866,62 @@ function App() {
     }));
 
     await loadMyChats();
+  }
+
+  async function uploadProfileBackgroundImage(event, type) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    const currentSession = sessionRef.current || session;
+    if (!file || !currentSession?.user?.id) return;
+
+    const fileExt = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
+    const filePath = `${currentSession.user.id}/${type}-${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type || "image/jpeg",
+      });
+
+    if (uploadError) {
+      console.error("PROFILE BACKGROUND UPLOAD ERROR:", uploadError);
+      alert(`Ошибка загрузки изображения: ${uploadError.message || "проверь bucket avatars"}`);
+      return;
+    }
+
+    const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
+    const publicUrl = data.publicUrl;
+
+    if (type === "profile-header") {
+      setProfileHeaderImageUrl(publicUrl);
+    } else {
+      setChatHeaderImageUrl(publicUrl);
+    }
+  }
+
+  async function changeMyPassword() {
+    const passwordValue = newPassword.trim();
+
+    if (passwordValue.length < 6) {
+      alert("Пароль должен быть минимум 6 символов");
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: passwordValue,
+    });
+
+    if (error) {
+      console.error("CHANGE PASSWORD ERROR:", error);
+      alert(`Не удалось изменить пароль: ${error.message}`);
+      return;
+    }
+
+    setNewPassword("");
+    alert("Пароль изменён");
   }
 
   async function logout() {
@@ -3042,7 +3141,10 @@ function App() {
         </div>
       </aside>
 
-      <main className={`chat ${!selectedChat ? "chat-home-mode" : ""}`}>
+      <main
+        className={`chat ${!selectedChat ? "chat-home-mode" : ""} ${chatHeaderImageUrl ? "has-custom-chat-bg" : ""}`}
+        style={chatHeaderImageUrl ? { "--custom-chat-bg": `url(${chatHeaderImageUrl})` } : undefined}
+      >
         <header className="chat-header">
           <button
             className="back-btn"
@@ -3697,10 +3799,33 @@ function App() {
               <button type="button" onClick={() => setIsMyProfileOpen(false)}>×</button>
             </div>
 
-            <div className={`my-profile-cover wallpaper-${profileCover}`}>
+            <div
+              className={`my-profile-cover wallpaper-${profileCover} ${profileHeaderImageUrl ? "has-custom-cover" : ""}`}
+              style={profileHeaderImageUrl ? { backgroundImage: `url(${profileHeaderImageUrl})` } : undefined}
+            >
               <label className="profile-big-avatar editable-avatar">
                 <input type="file" accept="image/*" onChange={uploadAvatar} />
                 {renderAvatar(profile)}
+              </label>
+            </div>
+
+            <div className="profile-upload-row">
+              <label className="profile-upload-btn">
+                🖼 Шапка профиля
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => uploadProfileBackgroundImage(event, "profile-header")}
+                />
+              </label>
+
+              <label className="profile-upload-btn">
+                🌌 Фон чата
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => uploadProfileBackgroundImage(event, "chat-header")}
+                />
               </label>
             </div>
 
@@ -3764,6 +3889,23 @@ function App() {
               </div>
             </div>
 
+            <div className="appearance-section">
+              <p>Изменить пароль</p>
+              <div className="password-change-row">
+                <input
+                  className="profile-input"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  placeholder="Новый пароль"
+                  autoComplete="new-password"
+                />
+                <button type="button" onClick={changeMyPassword}>
+                  Изменить
+                </button>
+              </div>
+            </div>
+
             <button type="button" className="profile-save-btn" onClick={saveMyProfileSettings}>
               💾 Сохранить профиль
             </button>
@@ -3801,9 +3943,17 @@ function App() {
 
 
       {isCircleRecorderOpen && (
-        <div className="circle-recorder-backdrop" onClick={() => {
-          if (!isCircleRecording) closeCircleRecorder();
-        }}>
+        <div
+          className="circle-recorder-backdrop"
+          onClick={() => {
+            if (!isCircleRecording) closeCircleRecorder();
+          }}
+          onTouchStart={handleCircleModalGestureStart}
+          onTouchMove={handleCircleModalGestureMove}
+          onTouchEnd={handleCircleModalGestureEnd}
+          onMouseDown={handleCircleModalGestureStart}
+          onMouseMove={handleCircleModalGestureMove}
+        >
           <div className="circle-recorder-modal telegram-circle-modal" onClick={(event) => event.stopPropagation()}>
             <div className="circle-recorder-header">
               <div>
@@ -3816,7 +3966,7 @@ function App() {
                       : "Ретушь включена"}
                 </p>
               </div>
-              <button type="button" onClick={closeCircleRecorder} disabled={isCircleRecording && !isCircleLocked}>×</button>
+              <button type="button" onClick={closeCircleRecorder} disabled={isCircleRecording}>×</button>
             </div>
 
             {(isCircleRecording || circlePreviewUrl) && (
@@ -3869,16 +4019,16 @@ function App() {
             <div className="circle-gesture-hints">
               {!circlePreviewUrl && (
                 <>
-                  <span>Удерживай 🎥 для записи</span>
-                  <span>⬆ закрепить</span>
-                  <span>⬅ отмена</span>
+                  <span>⬆ вверх — закрепить</span>
+                  <span>⬅ влево — отмена</span>
+                  <span>⏹ стоп — предпросмотр</span>
                 </>
               )}
             </div>
 
             {isCircleRecording && (
               <div className={`circle-lock-status ${isCircleLocked ? "locked" : ""}`}>
-                {isCircleLocked ? "🔒 Запись закреплена" : "Потяни вверх для блокировки"}
+                {isCircleLocked ? "🔒 Запись закреплена" : "Потяни вверх для блокировки или влево для отмены"}
               </div>
             )}
 
@@ -3904,11 +4054,9 @@ function App() {
                       <button type="button" className="circle-redo-btn" onClick={cancelCircleRecording}>
                         Отмена
                       </button>
-                      {isCircleLocked && (
-                        <button type="button" className="circle-stop-btn" onClick={() => stopCircleRecording()}>
-                          Стоп
-                        </button>
-                      )}
+                      <button type="button" className="circle-stop-btn" onClick={() => stopCircleRecording()}>
+                        Стоп
+                      </button>
                     </>
                   )}
                 </>
