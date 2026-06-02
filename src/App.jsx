@@ -43,6 +43,7 @@ function App() {
   const [circleBlob, setCircleBlob] = useState(null);
   const [circleFilter, setCircleFilter] = useState("normal");
   const [circleMask, setCircleMask] = useState("none");
+  const [circleMaskStyle, setCircleMaskStyle] = useState({ x: 50, y: 18, scale: 1 });
   const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
@@ -95,6 +96,7 @@ function App() {
   const circleChunksRef = useRef([]);
   const circleStartedAtRef = useRef(null);
   const circleTimerRef = useRef(null);
+  const circleFaceTrackingRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastTypingUpdateRef = useRef(0);
   const isRecordingRef = useRef(false);
@@ -2322,6 +2324,11 @@ function App() {
   function cleanupCircleRecorder() {
     clearInterval(circleTimerRef.current);
 
+    if (circleFaceTrackingRef.current) {
+      cancelAnimationFrame(circleFaceTrackingRef.current);
+      circleFaceTrackingRef.current = null;
+    }
+
     if (circlePreviewUrl) {
       URL.revokeObjectURL(circlePreviewUrl);
     }
@@ -2334,6 +2341,7 @@ function App() {
     circleRecorderRef.current = null;
     circleChunksRef.current = [];
     circleStartedAtRef.current = null;
+    setCircleMaskStyle({ x: 50, y: 18, scale: 1 });
   }
 
   function resetCircleRecorderState() {
@@ -2342,6 +2350,69 @@ function App() {
     setCircleSeconds(0);
     setCirclePreviewUrl(null);
     setCircleBlob(null);
+  }
+
+  function startCircleFaceTracking() {
+    if (circleFaceTrackingRef.current) {
+      cancelAnimationFrame(circleFaceTrackingRef.current);
+      circleFaceTrackingRef.current = null;
+    }
+
+    const video = circleVideoRef.current;
+
+    if (!video) return;
+
+    const hasFaceDetector = "FaceDetector" in window;
+
+    if (!hasFaceDetector) {
+      setCircleMaskStyle({ x: 50, y: 16, scale: 1 });
+      return;
+    }
+
+    let detector = null;
+
+    try {
+      detector = new window.FaceDetector({
+        fastMode: true,
+        maxDetectedFaces: 1,
+      });
+    } catch (error) {
+      setCircleMaskStyle({ x: 50, y: 16, scale: 1 });
+      return;
+    }
+
+    const tick = async () => {
+      try {
+        if (!circleVideoRef.current || circleVideoRef.current.readyState < 2) {
+          circleFaceTrackingRef.current = requestAnimationFrame(tick);
+          return;
+        }
+
+        const faces = await detector.detect(circleVideoRef.current);
+
+        if (faces?.[0]?.boundingBox) {
+          const box = faces[0].boundingBox;
+          const videoWidth = circleVideoRef.current.videoWidth || 1;
+          const videoHeight = circleVideoRef.current.videoHeight || 1;
+
+          const centerX = ((box.x + box.width / 2) / videoWidth) * 100;
+          const topY = (box.y / videoHeight) * 100;
+          const scale = Math.min(1.35, Math.max(0.75, box.width / (videoWidth * 0.38)));
+
+          setCircleMaskStyle({
+            x: Math.round(centerX),
+            y: Math.max(3, Math.round(topY - 6)),
+            scale,
+          });
+        }
+      } catch (error) {
+        // Тихий fallback: маска остаётся по центру.
+      }
+
+      circleFaceTrackingRef.current = requestAnimationFrame(tick);
+    };
+
+    circleFaceTrackingRef.current = requestAnimationFrame(tick);
   }
 
   async function openCircleRecorder() {
@@ -2372,9 +2443,14 @@ function App() {
       setTimeout(() => {
         if (circleVideoRef.current) {
           circleVideoRef.current.srcObject = stream;
+          circleVideoRef.current.onloadedmetadata = () => {
+            circleVideoRef.current?.play?.().catch(() => {});
+            startCircleFaceTracking();
+          };
           circleVideoRef.current.play?.().catch(() => {});
+          startCircleFaceTracking();
         }
-      }, 80);
+      }, 120);
     } catch (error) {
       console.error("CIRCLE CAMERA ERROR:", error);
       setIsCircleRecorderOpen(false);
@@ -2396,11 +2472,19 @@ function App() {
     }
 
     try {
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-        ? "video/webm;codecs=vp8,opus"
-        : "video/webm";
+      const supportedMimeTypes = [
+        "video/mp4;codecs=h264,aac",
+        "video/mp4",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+      ];
 
-      const recorder = new MediaRecorder(circleStreamRef.current, { mimeType });
+      const mimeType =
+        supportedMimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+
+      const recorder = mimeType
+        ? new MediaRecorder(circleStreamRef.current, { mimeType })
+        : new MediaRecorder(circleStreamRef.current);
 
       circleChunksRef.current = [];
       circleStartedAtRef.current = Date.now();
@@ -2496,20 +2580,23 @@ function App() {
     setReplyTo(null);
     setIsCircleRecorderOpen(false);
 
-    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${crypto.randomUUID()}.webm`;
+    const circleMimeType = circleBlob.type || "video/mp4";
+    const circleExtension = circleMimeType.includes("mp4") ? "mp4" : "webm";
+    const filePath = `${selectedChat.id}/${session.user.id}-${Date.now()}-${crypto.randomUUID()}.${circleExtension}`;
 
     const { error: uploadError } = await supabase.storage
       .from("circle-messages")
       .upload(filePath, circleBlob, {
         cacheControl: "3600",
         upsert: true,
-        contentType: circleBlob.type || "video/webm",
+        contentType: circleMimeType,
       });
 
     if (uploadError) {
       console.error("CIRCLE UPLOAD ERROR:", uploadError);
-      alert("Ошибка загрузки кружочка. Проверь bucket circle-messages.");
+      alert(`Ошибка загрузки кружочка: ${uploadError.message || "проверь bucket circle-messages и Storage policies"}`);
       setMessages((current) => current.filter((msg) => msg.id !== tempId));
+      setIsCircleRecorderOpen(true);
       return;
     }
 
@@ -3191,7 +3278,9 @@ function App() {
                               ? "🔥"
                               : msg.circle_mask === "demon"
                                 ? "😈"
-                                : ""}
+                                : msg.circle_mask === "bunny"
+                                  ? "🐰"
+                                  : ""}
                       </div>
                     )}
                     <button
@@ -3294,47 +3383,49 @@ function App() {
           )}
 
           <div className="input-area">
-            <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
-              📎
-              <input
-                type="file"
-                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
+            <div className="input-media-controls">
+              <label className={`image-btn ${!selectedChat ? "disabled" : ""}`}>
+                📎
+                <input
+                  type="file"
+                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
+                  disabled={!selectedChat}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    if (file.type.startsWith("image/")) {
+                      sendImage(event);
+                    } else {
+                      sendFile(event);
+                    }
+                  }}
+                />
+              </label>
+
+              <button
+                type="button"
+                className="circle-open-btn"
                 disabled={!selectedChat}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (!file) return;
-                  if (file.type.startsWith("image/")) {
-                    sendImage(event);
-                  } else {
-                    sendFile(event);
-                  }
-                }}
-              />
-            </label>
+                onClick={openCircleRecorder}
+                title="Кружочек"
+              >
+                🎥
+              </button>
 
-            <button
-              type="button"
-              className="circle-open-btn"
-              disabled={!selectedChat}
-              onClick={openCircleRecorder}
-              title="Кружочек"
-            >
-              🎥
-            </button>
-
-            <button
-              type="button"
-              className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
-              disabled={!selectedChat}
-              onMouseDown={startVoiceRecording}
-              onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
-              onMouseLeave={handleVoiceMouseLeave}
-              onTouchStart={startVoiceRecording}
-              onTouchMove={handleVoiceTouchMove}
-              onTouchEnd={handleVoiceTouchEnd}
-            >
-              {isRecording ? "●" : "🎤"}
-            </button>
+              <button
+                type="button"
+                className={`voice-btn ${isRecording ? "recording" : ""} ${isVoiceLocked ? "locked" : ""}`}
+                disabled={!selectedChat}
+                onMouseDown={startVoiceRecording}
+                onMouseUp={() => !isVoiceLockedRef.current && stopVoiceRecording({ send: true })}
+                onMouseLeave={handleVoiceMouseLeave}
+                onTouchStart={startVoiceRecording}
+                onTouchMove={handleVoiceTouchMove}
+                onTouchEnd={handleVoiceTouchEnd}
+              >
+                {isRecording ? "●" : "🎤"}
+              </button>
+            </div>
 
             <input
               value={text}
@@ -3675,11 +3766,19 @@ function App() {
                   src={circlePreviewUrl}
                   controls
                   playsInline
+                  loop
                 />
               )}
 
               {circleMask !== "none" && (
-                <div className={`circle-live-mask circle-mask-${circleMask}`}>
+                <div
+                  className={`circle-live-mask circle-mask-${circleMask}`}
+                  style={{
+                    "--mask-x": `${circleMaskStyle.x}%`,
+                    "--mask-y": `${circleMaskStyle.y}%`,
+                    "--mask-scale": circleMaskStyle.scale,
+                  }}
+                >
                   {circleMask === "glasses"
                     ? "😎"
                     : circleMask === "crown"
@@ -3688,7 +3787,9 @@ function App() {
                         ? "🔥"
                         : circleMask === "demon"
                           ? "😈"
-                          : ""}
+                          : circleMask === "bunny"
+                            ? "🐰"
+                            : ""}
                 </div>
               )}
 
@@ -3725,6 +3826,7 @@ function App() {
                   ["crown", "👑"],
                   ["fire", "🔥"],
                   ["demon", "😈"],
+                  ["bunny", "🐰"],
                 ].map(([value, label]) => (
                   <button
                     type="button"
