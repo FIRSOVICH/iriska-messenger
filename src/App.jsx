@@ -88,6 +88,10 @@ function App() {
   });
   const [isCallMuted, setIsCallMuted] = useState(false);
   const [isCallCameraOff, setIsCallCameraOff] = useState(false);
+  const [isCallSelfFullScreen, setIsCallSelfFullScreen] = useState(false);
+  const [callFacingMode, setCallFacingMode] = useState("user");
+  const [circleFacingMode, setCircleFacingMode] = useState("user");
+  const [callAudioUnlocked, setCallAudioUnlocked] = useState(false);
 
   const [newPassword, setNewPassword] = useState("");
 
@@ -143,6 +147,8 @@ function App() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const callLastTapRef = useRef(0);
+  const circleLastTapRef = useRef(0);
   const processedCallSignalsRef = useRef(new Set());
   const callListenStartedAtRef = useRef(null);
   const pendingIceCandidatesRef = useRef([]);
@@ -2524,7 +2530,7 @@ function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: "user",
+          facingMode: circleFacingMode,
           width: { ideal: 720 },
           height: { ideal: 720 },
           frameRate: { ideal: 30, max: 30 },
@@ -2908,6 +2914,101 @@ function App() {
   }
 
 
+
+  function playCallSound(type = "ring") {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const gain = audioContext.createGain();
+      gain.connect(audioContext.destination);
+      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+
+      const beep = (frequency, startAt, duration, volume = 0.18, wave = "sine") => {
+        const oscillator = audioContext.createOscillator();
+        oscillator.type = wave;
+        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime + startAt);
+        oscillator.connect(gain);
+        gain.gain.exponentialRampToValueAtTime(volume, audioContext.currentTime + startAt + 0.01);
+        oscillator.start(audioContext.currentTime + startAt);
+        oscillator.stop(audioContext.currentTime + startAt + duration);
+      };
+
+      if (type === "ring") {
+        beep(740, 0, 0.11, 0.16);
+        beep(740, 0.32, 0.11, 0.16);
+      } else if (type === "accept") {
+        beep(520, 0, 0.08, 0.18, "triangle");
+        beep(740, 0.09, 0.09, 0.18, "triangle");
+        beep(980, 0.19, 0.12, 0.16, "triangle");
+      } else if (type === "end") {
+        beep(620, 0, 0.1, 0.15, "sawtooth");
+        beep(420, 0.11, 0.12, 0.13, "sawtooth");
+        beep(240, 0.24, 0.16, 0.11, "sawtooth");
+      } else if (type === "missed") {
+        beep(330, 0, 0.13, 0.16);
+        beep(220, 0.18, 0.18, 0.13);
+      }
+
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.75);
+      setTimeout(() => audioContext.close?.(), 900);
+    } catch (error) {
+      console.warn("CALL SOUND ERROR:", error);
+    }
+  }
+
+  async function sendCallSystemMessage(chatId, textValue) {
+    const currentSession = sessionRef.current || session;
+    if (!currentSession?.user?.id || !chatId || !textValue) return;
+
+    await supabase
+      .from("messages")
+      .insert({
+        sender_id: currentSession.user.id,
+        chat_id: chatId,
+        text: textValue,
+        image_url: null,
+        audio_url: null,
+        file_url: null,
+        message_type: "text",
+        reactions: {},
+        is_deleted: false,
+      });
+
+    if (selectedChatRef.current?.id === chatId) {
+      await loadMessages(chatId);
+    }
+
+    await loadMyChats();
+  }
+
+  async function getLocalCallStream(type = "audio", facingMode = callFacingMode) {
+    const audio = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    if (type !== "video") {
+      return navigator.mediaDevices.getUserMedia({ audio, video: false });
+    }
+
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio,
+        video: {
+          facingMode,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+    } catch (error) {
+      console.warn("VIDEO WITH FACING MODE FAILED, RETRY BASIC VIDEO:", error);
+      return navigator.mediaDevices.getUserMedia({
+        audio,
+        video: true,
+      });
+    }
+  }
+
   function getCallPeerFromChat(chatId, senderId) {
     const existingChat = myChats.find((chat) => chat.id === chatId);
     if (existingChat?.otherUser) return existingChat.otherUser;
@@ -3058,10 +3159,8 @@ function App() {
 
     try {
       const callId = crypto.randomUUID();
-      const localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: type === "video",
-      });
+      playCallSound("ring");
+      const localStream = await getLocalCallStream(type, callFacingMode);
 
       localCallStreamRef.current = localStream;
 
@@ -3099,7 +3198,15 @@ function App() {
       });
     } catch (error) {
       console.error("START CALL ERROR:", error);
-      alert("Не удалось начать звонок. Проверь разрешение камеры/микрофона.");
+      const reason =
+        error?.name === "NotAllowedError"
+          ? "Браузер запретил камеру/микрофон. Разреши доступ в адресной строке рядом с замком."
+          : error?.name === "NotFoundError"
+            ? "Камера или микрофон не найдены."
+            : error?.name === "NotReadableError"
+              ? "Камера/микрофон заняты другой программой или вкладкой."
+              : "Проверь разрешение камеры/микрофона.";
+      alert(`Не удалось начать звонок. ${reason}`);
       cleanupCall(false);
     }
   }
@@ -3111,10 +3218,8 @@ function App() {
     if (!currentSession?.user?.id || !currentCall?.offer || !currentCall?.peerUser?.id) return;
 
     try {
-      const localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: currentCall.type === "video",
-      });
+      playCallSound("accept");
+      const localStream = await getLocalCallStream(currentCall.type, callFacingMode);
 
       localCallStreamRef.current = localStream;
 
@@ -3155,6 +3260,8 @@ function App() {
   async function rejectCall() {
     const currentCall = callStateRef.current;
 
+    playCallSound("missed");
+
     if (currentCall?.peerUser?.id && currentCall?.callId) {
       await sendCallSignal({
         type: "reject",
@@ -3162,6 +3269,13 @@ function App() {
         chatId: currentCall.chatId,
         receiverId: currentCall.peerUser.id,
       });
+
+      await sendCallSystemMessage(
+        currentCall.chatId,
+        currentCall.status === "incoming"
+          ? "📞 Звонок отклонён"
+          : "📞 Не удалось дозвониться до пользователя"
+      );
     }
 
     cleanupCall(false);
@@ -3170,6 +3284,8 @@ function App() {
   async function endCall() {
     const currentCall = callStateRef.current;
 
+    playCallSound("end");
+
     if (currentCall?.peerUser?.id && currentCall?.callId) {
       await sendCallSignal({
         type: "end",
@@ -3177,6 +3293,8 @@ function App() {
         chatId: currentCall.chatId,
         receiverId: currentCall.peerUser.id,
       });
+
+      await sendCallSystemMessage(currentCall.chatId, "📞 Звонок завершён");
     }
 
     cleanupCall(false);
@@ -3213,6 +3331,8 @@ function App() {
 
     setIsCallMuted(false);
     setIsCallCameraOff(false);
+    setIsCallSelfFullScreen(false);
+    setCallAudioUnlocked(false);
     setCallState({
       status: "idle",
       type: "audio",
@@ -3237,6 +3357,104 @@ function App() {
       track.enabled = !nextOff;
     });
     setIsCallCameraOff(nextOff);
+  }
+
+
+  async function replaceCallVideoTrack(nextFacingMode) {
+    const currentCall = callStateRef.current;
+    if (currentCall.type !== "video") return;
+
+    try {
+      const nextStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: nextFacingMode,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      const nextVideoTrack = nextStream.getVideoTracks()[0];
+      if (!nextVideoTrack) return;
+
+      const sender = peerConnectionRef.current
+        ?.getSenders()
+        ?.find((item) => item.track?.kind === "video");
+
+      if (sender) {
+        await sender.replaceTrack(nextVideoTrack);
+      }
+
+      const oldVideoTracks = localCallStreamRef.current?.getVideoTracks?.() || [];
+      oldVideoTracks.forEach((track) => {
+        localCallStreamRef.current?.removeTrack?.(track);
+        track.stop();
+      });
+
+      localCallStreamRef.current?.addTrack(nextVideoTrack);
+      attachCallStreams();
+    } catch (error) {
+      console.error("SWITCH CALL CAMERA ERROR:", error);
+      alert("Не удалось переключить камеру");
+    }
+  }
+
+  async function handleCallSelfPreviewTap() {
+    const now = Date.now();
+
+    if (now - callLastTapRef.current < 320) {
+      const nextFacingMode = callFacingMode === "user" ? "environment" : "user";
+      setCallFacingMode(nextFacingMode);
+      await replaceCallVideoTrack(nextFacingMode);
+      callLastTapRef.current = 0;
+      return;
+    }
+
+    callLastTapRef.current = now;
+    setIsCallSelfFullScreen((value) => !value);
+  }
+
+  async function switchCircleCamera() {
+    const nextFacingMode = circleFacingMode === "user" ? "environment" : "user";
+    setCircleFacingMode(nextFacingMode);
+
+    if (!circleStreamRef.current) return;
+
+    try {
+      circleStreamRef.current.getTracks().forEach((track) => track.stop());
+
+      const nextStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: nextFacingMode,
+          width: { ideal: 720 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: true,
+      });
+
+      circleStreamRef.current = nextStream;
+
+      if (circleVideoRef.current) {
+        circleVideoRef.current.srcObject = nextStream;
+        circleVideoRef.current.play?.().catch(() => {});
+      }
+    } catch (error) {
+      console.error("SWITCH CIRCLE CAMERA ERROR:", error);
+      alert("Не удалось переключить камеру кружочка");
+    }
+  }
+
+  function handleCirclePreviewTap() {
+    const now = Date.now();
+
+    if (now - circleLastTapRef.current < 320) {
+      switchCircleCamera();
+      circleLastTapRef.current = 0;
+      return;
+    }
+
+    circleLastTapRef.current = now;
   }
 
   async function handleCallSignal(row) {
@@ -3302,6 +3520,12 @@ function App() {
     }
 
     if (["end", "reject"].includes(row.signal_type)) {
+      playCallSound(row.signal_type === "reject" ? "missed" : "end");
+      if (row.signal_type === "end") {
+        await sendCallSystemMessage(row.chat_id, "📞 Звонок завершён");
+      } else {
+        await sendCallSystemMessage(row.chat_id, "📞 Не удалось дозвониться до пользователя");
+      }
       cleanupCall(false);
     }
   }
@@ -4706,6 +4930,8 @@ function App() {
                   muted
                   playsInline
                   autoPlay
+                  onClick={handleCirclePreviewTap}
+                  onTouchEnd={handleCirclePreviewTap}
                 />
               ) : (
                 <>
@@ -4806,7 +5032,7 @@ function App() {
 
       {callState.status !== "idle" && (
         <div className="call-backdrop">
-          <div className={`call-modal call-${callState.type}`}>
+          <div className={`call-modal call-${callState.type} ${isCallSelfFullScreen ? "self-fullscreen" : ""}`}>
             <div className="call-header">
               <div className="call-peer-avatar">
                 {renderAvatar(callState.peerUser || selectedUser)}
@@ -4827,11 +5053,27 @@ function App() {
 
             {callState.type === "video" ? (
               <div className="call-video-grid">
-                <video ref={remoteVideoRef} className="remote-call-video" playsInline autoPlay />
-                <video ref={localVideoRef} className="local-call-video" playsInline autoPlay muted />
+                <video
+                  ref={isCallSelfFullScreen ? localVideoRef : remoteVideoRef}
+                  className="remote-call-video"
+                  playsInline
+                  autoPlay
+                  muted={isCallSelfFullScreen}
+                />
+                <video
+                  ref={isCallSelfFullScreen ? remoteVideoRef : localVideoRef}
+                  className="local-call-video"
+                  playsInline
+                  autoPlay
+                  muted={!isCallSelfFullScreen}
+                  onClick={handleCallSelfPreviewTap}
+                  onTouchEnd={handleCallSelfPreviewTap}
+                  title="Тап — развернуть, двойной тап — сменить камеру"
+                />
+                <div className="call-preview-hint">тап — экран / двойной тап — камера</div>
               </div>
             ) : (
-              <div className="audio-call-visual">
+              <div className="audio-call-visual audio-call-visual-clean">
                 <div className="audio-pulse">
                   {renderAvatar(callState.peerUser || selectedUser)}
                 </div>
@@ -4842,20 +5084,27 @@ function App() {
                       ? "Звонит тебе"
                       : "Ожидаем ответа"}
                 </span>
+                <div className="audio-self-mini">
+                  {renderAvatar(profile)}
+                </div>
               </div>
             )}
 
-            <button
-              type="button"
-              className="call-audio-unlock"
-              onClick={() => {
-                attachCallStreams();
-                remoteAudioRef.current?.play?.().catch(() => {});
-                remoteVideoRef.current?.play?.().catch(() => {});
-              }}
-            >
-              🔊 Включить звук
-            </button>
+            {!callAudioUnlocked && (
+              <button
+                type="button"
+                className="call-audio-unlock"
+                onClick={() => {
+                  setCallAudioUnlocked(true);
+                  attachCallStreams();
+                  remoteAudioRef.current?.play?.().catch(() => {});
+                  remoteVideoRef.current?.play?.().catch(() => {});
+                  playCallSound("accept");
+                }}
+              >
+                🔊 Включить звук
+              </button>
+            )}
 
             <div className="call-controls">
               {callState.status === "incoming" ? (

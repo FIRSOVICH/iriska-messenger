@@ -6157,3 +6157,84 @@ html[data-theme="light"] body,
 .call-audio-unlock:active {
   transform: scale(0.98);
 }
+
+
+/* =========================================================
+   IRISKA CALLS PREMIUM UI v4
+   ========================================================= */
+
+.audio-call-visual-clean {
+  position: relative;
+  min-height: 230px !important;
+  padding-bottom: 24px;
+}
+
+.audio-self-mini {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: 58px;
+  height: 58px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.9);
+  border: 2px solid rgba(147, 197, 253, 0.38);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  display: grid;
+  place-items: center;
+}
+
+.audio-self-mini .avatar,
+.audio-self-mini img {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 18px !important;
+  object-fit: cover !important;
+}
+
+.call-video-grid.self-fullscreen .remote-call-video,
+.call-modal.self-fullscreen .remote-call-video {
+  object-fit: cover;
+}
+
+.local-call-video {
+  cursor: pointer;
+}
+
+.call-preview-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  max-width: calc(66% - 20px);
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.64);
+  color: rgba(255,255,255,0.82);
+  font-size: 11px;
+  font-weight: 900;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.call-audio-unlock {
+  transition: 0.16s ease;
+}
+
+.call-audio-unlock:hover {
+  filter: brightness(1.08);
+}
+
+@media (max-width: 768px) {
+  .audio-self-mini {
+    width: 52px;
+    height: 52px;
+    border-radius: 18px;
+  }
+
+  .call-preview-hint {
+    font-size: 10px;
+    bottom: 10px;
+    left: 10px;
+  }
+}
