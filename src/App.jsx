@@ -3024,6 +3024,31 @@ function App() {
     };
   }
 
+  async function forcePlayRemoteAudio() {
+    const audioElement = remoteAudioRef.current;
+    const remoteStream = remoteCallStreamRef.current;
+
+    if (!audioElement || !remoteStream) return;
+
+    const audioTracks = remoteStream.getAudioTracks?.() || [];
+    audioTracks.forEach((track) => {
+      track.enabled = true;
+    });
+
+    audioElement.srcObject = remoteStream;
+    audioElement.autoplay = true;
+    audioElement.muted = false;
+    audioElement.volume = 1;
+    audioElement.playsInline = true;
+
+    try {
+      await audioElement.play();
+      setCallAudioUnlocked(true);
+    } catch (error) {
+      console.warn("REMOTE AUDIO PLAY BLOCKED:", error);
+    }
+  }
+
   function attachCallStreams() {
     setTimeout(() => {
       if (localVideoRef.current) {
@@ -3040,14 +3065,7 @@ function App() {
         remoteVideoRef.current.play?.().catch(() => {});
       }
 
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteCallStreamRef.current;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = 1;
-        remoteAudioRef.current.play?.().catch((error) => {
-          console.warn("REMOTE AUDIO PLAY BLOCKED:", error);
-        });
-      }
+      forcePlayRemoteAudio();
     }, 80);
   }
 
@@ -3098,6 +3116,7 @@ function App() {
       }
 
       attachCallStreams();
+      setTimeout(() => forcePlayRemoteAudio(), 220);
     };
 
     peerConnection.onicecandidate = async (event) => {
@@ -3242,6 +3261,7 @@ function App() {
       }));
 
       attachCallStreams();
+      setTimeout(() => forcePlayRemoteAudio(), 250);
 
       await sendCallSignal({
         type: "answer",
@@ -5073,17 +5093,25 @@ function App() {
                 <div className="call-preview-hint">тап — экран / двойной тап — камера</div>
               </div>
             ) : (
-              <div className="audio-call-visual audio-call-visual-clean">
-                <div className="audio-pulse">
-                  {renderAvatar(callState.peerUser || selectedUser)}
+              <div className="audio-call-visual audio-call-visual-clean no-center-avatar">
+                <div className={`call-connection-status ${callState.status === "active" ? "connected" : "connecting"}`}>
+                  <span className="call-status-dot" />
+                  <strong>
+                    {callState.status === "active"
+                      ? "Соединение установлено"
+                      : callState.status === "incoming"
+                        ? "Входящий звонок"
+                        : "Соединение устанавливается"}
+                  </strong>
+                  <p>
+                    {callState.status === "active"
+                      ? "Говорите, звук подключён"
+                      : callState.status === "incoming"
+                        ? "Пользователь звонит тебе"
+                        : "Ожидаем ответа собеседника"}
+                  </p>
                 </div>
-                <span>
-                  {callState.status === "active"
-                    ? "Соединение активно"
-                    : callState.status === "incoming"
-                      ? "Звонит тебе"
-                      : "Ожидаем ответа"}
-                </span>
+
                 <div className="audio-self-mini">
                   {renderAvatar(profile)}
                 </div>
@@ -5094,10 +5122,9 @@ function App() {
               <button
                 type="button"
                 className="call-audio-unlock"
-                onClick={() => {
-                  setCallAudioUnlocked(true);
+                onClick={async () => {
                   attachCallStreams();
-                  remoteAudioRef.current?.play?.().catch(() => {});
+                  await forcePlayRemoteAudio();
                   remoteVideoRef.current?.play?.().catch(() => {});
                   playCallSound("accept");
                 }}
