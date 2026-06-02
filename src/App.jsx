@@ -42,6 +42,8 @@ function App() {
   const [circlePreviewUrl, setCirclePreviewUrl] = useState(null);
   const [circleBlob, setCircleBlob] = useState(null);
   const [circleFilter, setCircleFilter] = useState("smooth");
+  const [isCircleLocked, setIsCircleLocked] = useState(false);
+  const [circleRecordHint, setCircleRecordHint] = useState("");
     const [typingUser, setTypingUser] = useState(null);
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
@@ -94,6 +96,11 @@ function App() {
   const circleChunksRef = useRef([]);
   const circleStartedAtRef = useRef(null);
   const circleTimerRef = useRef(null);
+  const circleTouchStartRef = useRef({ x: 0, y: 0 });
+  const circleMouseStartRef = useRef({ x: 0, y: 0 });
+  const circleHoldTimerRef = useRef(null);
+  const circleCancelRef = useRef(false);
+  const circleLockedRef = useRef(false);
   const typingTimeoutRef = useRef(null);
   const lastTypingUpdateRef = useRef(0);
   const isRecordingRef = useRef(false);
@@ -2320,7 +2327,9 @@ function App() {
 
   function cleanupCircleRecorder() {
     clearInterval(circleTimerRef.current);
-
+    clearTimeout(circleHoldTimerRef.current);
+    circleCancelRef.current = false;
+    circleLockedRef.current = false;
 
     if (circlePreviewUrl) {
       URL.revokeObjectURL(circlePreviewUrl);
@@ -2339,12 +2348,14 @@ function App() {
   function resetCircleRecorderState() {
     cleanupCircleRecorder();
     setIsCircleRecording(false);
+    setIsCircleLocked(false);
+    setCircleRecordHint("");
     setCircleSeconds(0);
     setCirclePreviewUrl(null);
     setCircleBlob(null);
   }
 
-  async function openCircleRecorder() {
+  async function openCircleRecorder({ autoStart = false } = {}) {
     if (!selectedChat?.id || !session?.user?.id) return;
 
     if (selectedUser?.id && blockedUserIdsRef.current.includes(selectedUser.id)) {
@@ -2356,6 +2367,8 @@ function App() {
     setCirclePreviewUrl(null);
     setCircleBlob(null);
     setCircleSeconds(0);
+    setIsCircleLocked(false);
+    setCircleRecordHint(autoStart ? "Удерживай для записи · вверх — закрепить · влево — отмена" : "Ретушь включена");
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -2363,6 +2376,7 @@ function App() {
           facingMode: "user",
           width: { ideal: 720 },
           height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
         },
         audio: true,
       });
@@ -2377,7 +2391,11 @@ function App() {
           };
           circleVideoRef.current.play?.().catch(() => {});
         }
-      }, 120);
+
+        if (autoStart) {
+          setTimeout(() => startCircleRecording(), 120);
+        }
+      }, 140);
     } catch (error) {
       console.error("CIRCLE CAMERA ERROR:", error);
       setIsCircleRecorderOpen(false);
@@ -2410,11 +2428,19 @@ function App() {
         supportedMimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
 
       const recorder = mimeType
-        ? new MediaRecorder(circleStreamRef.current, { mimeType })
-        : new MediaRecorder(circleStreamRef.current);
+        ? new MediaRecorder(circleStreamRef.current, {
+            mimeType,
+            videoBitsPerSecond: 1100000,
+            audioBitsPerSecond: 96000,
+          })
+        : new MediaRecorder(circleStreamRef.current, {
+            videoBitsPerSecond: 1100000,
+            audioBitsPerSecond: 96000,
+          });
 
       circleChunksRef.current = [];
       circleStartedAtRef.current = Date.now();
+      circleCancelRef.current = false;
 
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) {
@@ -2425,24 +2451,53 @@ function App() {
       recorder.onstop = () => {
         clearInterval(circleTimerRef.current);
 
+        const duration = Math.max(
+          1,
+          Math.round((Date.now() - (circleStartedAtRef.current || Date.now())) / 1000)
+        );
+
+        setIsCircleRecording(false);
+        setIsCircleLocked(false);
+        circleLockedRef.current = false;
+
+        if (circleCancelRef.current) {
+          circleCancelRef.current = false;
+          circleChunksRef.current = [];
+          setCircleSeconds(0);
+          setCircleBlob(null);
+          setCirclePreviewUrl(null);
+          setCircleRecordHint("Кружочек отменён");
+          return;
+        }
+
         const blob = new Blob(circleChunksRef.current, {
           type: recorder.mimeType || "video/webm",
         });
+
+        if (!blob.size) {
+          setCircleRecordHint("Запись пустая, попробуй ещё раз");
+          return;
+        }
 
         const previewUrl = URL.createObjectURL(blob);
 
         setCircleBlob(blob);
         setCirclePreviewUrl(previewUrl);
-        setIsCircleRecording(false);
-        setCircleSeconds(
-          Math.max(1, Math.round((Date.now() - (circleStartedAtRef.current || Date.now())) / 1000))
-        );
+        setCircleSeconds(duration);
+        setCircleRecordHint("Пересмотри и отправь");
+
+        setTimeout(() => {
+          const preview = document.getElementById("circle-preview-video");
+          preview?.load?.();
+        }, 80);
       };
 
       circleRecorderRef.current = recorder;
-      recorder.start();
+      recorder.start(350);
       setIsCircleRecording(true);
+      setIsCircleLocked(false);
       setCircleSeconds(0);
+      setCircleRecordHint("Записывает кружочек… вверх — закрепить, влево — отмена");
 
       clearInterval(circleTimerRef.current);
       circleTimerRef.current = setInterval(() => {
@@ -2450,7 +2505,7 @@ function App() {
           const next = seconds + 1;
 
           if (next >= 60) {
-            stopCircleRecording();
+            stopCircleRecording({ send: false });
           }
 
           return next;
@@ -2462,16 +2517,78 @@ function App() {
     }
   }
 
-  function stopCircleRecording() {
+  function stopCircleRecording({ cancel = false } = {}) {
     const recorder = circleRecorderRef.current;
+
+    if (cancel) {
+      circleCancelRef.current = true;
+      setCircleRecordHint("Запись отменена");
+    }
 
     if (!recorder || recorder.state === "inactive") {
       setIsCircleRecording(false);
+      setIsCircleLocked(false);
+      circleLockedRef.current = false;
       clearInterval(circleTimerRef.current);
       return;
     }
 
     recorder.stop();
+  }
+
+  function cancelCircleRecording() {
+    circleCancelRef.current = true;
+    stopCircleRecording({ cancel: true });
+  }
+
+  async function handleCircleQuickPressStart(event) {
+    if (!selectedChat) return;
+
+    const point = event.touches?.[0] || event;
+    circleTouchStartRef.current = { x: point.clientX || 0, y: point.clientY || 0 };
+    circleMouseStartRef.current = { x: point.clientX || 0, y: point.clientY || 0 };
+    circleCancelRef.current = false;
+    circleLockedRef.current = false;
+
+    clearTimeout(circleHoldTimerRef.current);
+    circleHoldTimerRef.current = setTimeout(async () => {
+      await openCircleRecorder({ autoStart: true });
+    }, 260);
+  }
+
+  function handleCircleQuickMove(event) {
+    if (!isCircleRecording) return;
+
+    const point = event.touches?.[0] || event;
+    if (!point) return;
+
+    const start = circleTouchStartRef.current;
+    const dx = (point.clientX || 0) - start.x;
+    const dy = (point.clientY || 0) - start.y;
+
+    if (dy < -58 && !circleLockedRef.current) {
+      circleLockedRef.current = true;
+      setIsCircleLocked(true);
+      setCircleRecordHint("Запись закреплена — можно отпустить");
+      navigator.vibrate?.([35, 20, 35]);
+    }
+
+    if (dx < -72) {
+      navigator.vibrate?.([80]);
+      cancelCircleRecording();
+    }
+  }
+
+  function handleCircleQuickPressEnd() {
+    clearTimeout(circleHoldTimerRef.current);
+
+    if (!isCircleRecording) return;
+
+    if (circleLockedRef.current || isCircleLocked) {
+      return;
+    }
+
+    stopCircleRecording();
   }
 
   async function sendCircleMessage() {
@@ -3313,9 +3430,16 @@ function App() {
             <div className="input-left-actions">
               <button
                 type="button"
-                className="circle-open-btn"
+                className={`circle-open-btn ${isCircleRecording ? "recording" : ""} ${isCircleLocked ? "locked" : ""}`}
                 disabled={!selectedChat}
-                onClick={openCircleRecorder}
+                onClick={() => openCircleRecorder()}
+                onMouseDown={handleCircleQuickPressStart}
+                onMouseMove={handleCircleQuickMove}
+                onMouseUp={handleCircleQuickPressEnd}
+                onMouseLeave={handleCircleQuickPressEnd}
+                onTouchStart={handleCircleQuickPressStart}
+                onTouchMove={handleCircleQuickMove}
+                onTouchEnd={handleCircleQuickPressEnd}
                 title="Кружочек"
               >
                 🎥
@@ -3677,25 +3801,35 @@ function App() {
 
 
       {isCircleRecorderOpen && (
-        <div className="circle-recorder-backdrop" onClick={closeCircleRecorder}>
-          <div className="circle-recorder-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="circle-recorder-backdrop" onClick={() => {
+          if (!isCircleRecording) closeCircleRecorder();
+        }}>
+          <div className="circle-recorder-modal telegram-circle-modal" onClick={(event) => event.stopPropagation()}>
             <div className="circle-recorder-header">
               <div>
                 <h3>Кружочек</h3>
                 <p>
                   {isCircleRecording
-                    ? `Запись ${formatVoiceTime(circleSeconds)}`
+                    ? circleRecordHint || "Записывает кружочек…"
                     : circlePreviewUrl
                       ? "Пересмотри и отправь"
                       : "Ретушь включена"}
                 </p>
               </div>
-              <button type="button" onClick={closeCircleRecorder}>×</button>
+              <button type="button" onClick={closeCircleRecorder} disabled={isCircleRecording && !isCircleLocked}>×</button>
             </div>
 
-            <div className="circle-retouch-badge">Ретушь лица включена</div>
+            {(isCircleRecording || circlePreviewUrl) && (
+              <div className="circle-progress-info">
+                <span>{isCircleRecording ? "● Записывает кружочек…" : "Готово к отправке"}</span>
+                <strong>{formatVoiceTime(circleSeconds)} / 01:00</strong>
+              </div>
+            )}
 
-            <div className="circle-camera-wrap circle-filter-smooth">
+            <div
+              className={`circle-camera-wrap circle-filter-smooth ${isCircleRecording ? "recording" : ""}`}
+              style={{ "--circle-progress": `${Math.min(360, (circleSeconds / 60) * 360)}deg` }}
+            >
               {!circlePreviewUrl ? (
                 <video
                   ref={circleVideoRef}
@@ -3724,7 +3858,7 @@ function App() {
                       video.play?.().catch(() => {});
                     }}
                   >
-                    ▶ Пересмотреть
+                    ▶
                   </button>
                 </>
               )}
@@ -3732,17 +3866,50 @@ function App() {
               {isCircleRecording && <div className="circle-rec-dot">REC</div>}
             </div>
 
-            <div className="circle-recorder-actions">
+            <div className="circle-gesture-hints">
+              {!circlePreviewUrl && (
+                <>
+                  <span>Удерживай 🎥 для записи</span>
+                  <span>⬆ закрепить</span>
+                  <span>⬅ отмена</span>
+                </>
+              )}
+            </div>
+
+            {isCircleRecording && (
+              <div className={`circle-lock-status ${isCircleLocked ? "locked" : ""}`}>
+                {isCircleLocked ? "🔒 Запись закреплена" : "Потяни вверх для блокировки"}
+              </div>
+            )}
+
+            <div className="circle-recorder-actions telegram-circle-actions">
               {!circlePreviewUrl ? (
                 <>
                   {!isCircleRecording ? (
-                    <button type="button" className="circle-record-btn" onClick={startCircleRecording}>
-                      Записать
+                    <button
+                      type="button"
+                      className="circle-record-btn"
+                      onMouseDown={handleCircleQuickPressStart}
+                      onMouseMove={handleCircleQuickMove}
+                      onMouseUp={handleCircleQuickPressEnd}
+                      onMouseLeave={handleCircleQuickPressEnd}
+                      onTouchStart={handleCircleQuickPressStart}
+                      onTouchMove={handleCircleQuickMove}
+                      onTouchEnd={handleCircleQuickPressEnd}
+                    >
+                      Удерживать запись
                     </button>
                   ) : (
-                    <button type="button" className="circle-stop-btn" onClick={stopCircleRecording}>
-                      Стоп
-                    </button>
+                    <>
+                      <button type="button" className="circle-redo-btn" onClick={cancelCircleRecording}>
+                        Отмена
+                      </button>
+                      {isCircleLocked && (
+                        <button type="button" className="circle-stop-btn" onClick={() => stopCircleRecording()}>
+                          Стоп
+                        </button>
+                      )}
+                    </>
                   )}
                 </>
               ) : (
@@ -3752,6 +3919,7 @@ function App() {
                     setCirclePreviewUrl(null);
                     setCircleBlob(null);
                     setCircleSeconds(0);
+                    setCircleRecordHint("Ретушь включена");
                     if (circleVideoRef.current && circleStreamRef.current) {
                       circleVideoRef.current.srcObject = circleStreamRef.current;
                       circleVideoRef.current.play?.().catch(() => {});

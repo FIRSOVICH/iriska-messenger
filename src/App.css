@@ -5248,3 +5248,178 @@ html[data-theme="light"] body,
     font-size: 14px !important;
   }
 }
+
+
+/* =========================================================
+   IRISKA CIRCLES TELEGRAM LEVEL v2
+   ========================================================= */
+
+.circle-open-btn.recording {
+  background: linear-gradient(135deg, #ef4444, #f97316) !important;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.16), 0 0 22px rgba(239, 68, 68, 0.45);
+  animation: circleButtonPulse 1s infinite ease-in-out;
+}
+
+.circle-open-btn.locked {
+  background: linear-gradient(135deg, #22c55e, #2563eb) !important;
+}
+
+@keyframes circleButtonPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.telegram-circle-modal {
+  max-width: 430px !important;
+  overflow: hidden !important;
+}
+
+.circle-recorder-header button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.circle-progress-info {
+  width: 100%;
+  margin: 0 auto 12px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.circle-progress-info span {
+  color: #fca5a5;
+}
+
+.circle-progress-info strong {
+  color: white;
+  white-space: nowrap;
+}
+
+.circle-camera-wrap {
+  position: relative;
+  border: 0 !important;
+  background:
+    conic-gradient(from 0deg, #38bdf8 var(--circle-progress, 0deg), rgba(30, 41, 59, 0.9) 0deg) !important;
+  padding: 5px;
+}
+
+.circle-camera-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 3px rgba(2, 6, 23, 0.84);
+  z-index: 2;
+}
+
+.circle-camera-wrap.recording {
+  box-shadow:
+    0 0 0 8px rgba(239, 68, 68, 0.08),
+    0 24px 70px rgba(0, 0, 0, 0.45),
+    0 0 35px rgba(239, 68, 68, 0.28) !important;
+}
+
+.circle-camera-wrap .circle-camera-video {
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.circle-rec-dot {
+  z-index: 5 !important;
+  bottom: 18px !important;
+  letter-spacing: 0.12em;
+}
+
+.circle-preview-play {
+  width: 56px !important;
+  height: 56px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  background: rgba(15, 23, 42, 0.72) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 22px !important;
+  z-index: 6 !important;
+}
+
+.circle-gesture-hints {
+  min-height: 24px;
+  margin: 12px 0 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: center;
+}
+
+.circle-gesture-hints span {
+  border-radius: 999px;
+  padding: 6px 9px;
+  background: rgba(30, 41, 59, 0.78);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.circle-lock-status {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.78);
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.circle-lock-status.locked {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.82), rgba(37, 99, 235, 0.82));
+  color: white;
+}
+
+.telegram-circle-actions {
+  margin-top: 14px !important;
+}
+
+.telegram-circle-actions button {
+  min-height: 50px !important;
+}
+
+.circle-record-btn {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.circle-redo-btn,
+.circle-stop-btn,
+.circle-send-btn {
+  touch-action: manipulation;
+}
+
+@media (max-width: 768px) {
+  .telegram-circle-modal {
+    width: min(430px, calc(100vw - 20px)) !important;
+    max-height: min(92vh, 760px) !important;
+  }
+
+  .circle-progress-info {
+    font-size: 12px;
+  }
+
+  .circle-gesture-hints span {
+    font-size: 11px;
+    padding: 6px 8px;
+  }
+}
