@@ -6495,3 +6495,32 @@ html[data-theme="light"] body,
     box-shadow: 0 0 28px rgba(59, 130, 246, 0.42);
   }
 }
+
+
+/* =========================================================
+   IRISKA CALLS FORCE TURN v14
+   ========================================================= */
+
+.remote-call-audio {
+  display: block !important;
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 2px !important;
+  height: 2px !important;
+  opacity: 0.01 !important;
+  pointer-events: none !important;
+}
+
+.call-audio-unlock {
+  animation: iriskaCallAudioNeedTapV14 1.4s infinite ease-in-out;
+}
+
+@keyframes iriskaCallAudioNeedTapV14 {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(59, 130, 246, 0.42);
+  }
+}
